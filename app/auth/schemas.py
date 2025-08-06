@@ -1,14 +1,16 @@
 from pydantic import BaseModel
+from typing import Optional
 
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
-class UserBase(BaseModel):
-    email: str
-    is_active: bool
+class TokenPayload(BaseModel):
+    sub: Optional[str] = None
 
+class User(BaseModel):
+    username: str
+    disabled: Optional[bool] = False
 
-class UserCreate(UserBase):
-    password: str
-
-
-class UserUpdate(UserBase):
-    password: str | None = None
+class UserInDB(User):
+    hashed_password: str
