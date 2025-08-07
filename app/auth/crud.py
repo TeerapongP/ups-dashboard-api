@@ -1,30 +1,17 @@
-from passlib.context import CryptContext
-from app.auth.schemas import UserInDB, User
+# ลบ import ไม่ใช้ออก
+# from app.auth.schemas import User  <- ลบออก
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from app.auth.schemas import UserCreate, UserUpdate  # ตัวอย่าง import ที่ใช้จริง (แก้ตามจริง)
 
-# ตัวอย่าง fake DB
-fake_users_db = {
-    "alice": {
-        "username": "alice",
-        "hashed_password": pwd_context.hash("secret"),
-        "disabled": False,
-    }
-}
+# เว้นบรรทัด 2 บรรทัด ก่อนฟังก์ชัน/คลาส
 
-def get_user(username: str) -> UserInDB | None:
-    user = fake_users_db.get(username)
-    if user:
-        return UserInDB(**user)
-    return None
+def get_user():
+    pass
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
 
-def authenticate_user(username: str, password: str) -> UserInDB | None:
-    user = get_user(username)
-    if not user:
-        return None
-    if not verify_password(password, user.hashed_password):
-        return None
-    return user
+def create_user():
+    raise NotImplementedError()
+
+
+def update_user():
+   raise NotImplementedError()
