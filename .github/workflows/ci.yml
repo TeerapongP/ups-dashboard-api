@@ -50,4 +50,20 @@ jobs:
         with:
           context: .
           push: true
-          tags: yourdockerhubusername/ups-dashboard:latest
+          tags: thirapongp/ups-dashboard-api:latest
+
+  comment:
+    runs-on: ubuntu-latest
+    needs: build-docker
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Comment on the Pull Request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "✅ Next.js app ถูก Lint, Build และ Push Docker Image เรียบร้อยแล้วครับ!"
+            })
