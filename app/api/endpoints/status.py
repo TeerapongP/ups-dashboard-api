@@ -1,9 +1,9 @@
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+
 
 router = APIRouter()
 
 
 @router.get("/status")
-def read_status() -> dict:
+def read_status():
     return {"status": "UPS System OK"}
