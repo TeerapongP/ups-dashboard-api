@@ -30,9 +30,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> schemas.User:
         )
     user = crud.get_user(username)
     if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    if user.disabled:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if getattr(user, "disabled", False):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
     return user
 
 @app.get("/users/me", response_model=schemas.User)
