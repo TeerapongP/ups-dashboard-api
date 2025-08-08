@@ -29,18 +29,3 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     access_token = jwt_handler.create_access_token(subject=user.username)
     return {"access_token": access_token, "token_type": "bearer"}
 
-@router.get("/me", response_model=schemas.User)
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    username = jwt_handler.verify_token(token)
-    if not username:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    user = crud.get_user(username)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    if getattr(user, "disabled", False):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
-    return user
