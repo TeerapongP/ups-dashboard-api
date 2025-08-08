@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.api.endpoints import status
+from app.api.endpoints.endpoints import status
 from app.core.config import settings
 
 app = FastAPI(
