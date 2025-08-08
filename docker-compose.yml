@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  ups-dashboard:
+    image: mysql:latest
+    container_name: ups-dashboard
+    environment:
+      MYSQL_ROOT_PASSWORD: kpsbkw
+      MYSQL_DATABASE: ups-dashboard
+      MYSQL_USER: ups-dashboard
+      MYSQL_PASSWORD: kpsbkw
+      TZ: Asia/Bangkok
+      MYSQL_CHARACTER_SET_SERVER: utf8mb4
+      MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

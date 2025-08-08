@@ -1,11 +1,15 @@
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
+    PROJECT_NAME: str = "UPS Dashboard API" 
+    SQLALCHEMY_DATABASE_URL: str
+    VERSION: str = "1.0.0"  
     SECRET_KEY: str
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 *5 # Default to 5 hours
-    ALGORITHM: str = "HS256"
+    ALGORITHM: str
+    ACCESS_TOKEN_EXPIRE_MINUTES: int
 
     class Config:
         env_file = ".env"
+        case_sensitive = True
 
 settings = Settings()
