@@ -8,7 +8,7 @@ from model.response_model import MessageResponse
 
 
 router = APIRouter()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")  # ตรงกับ path login
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login") 
 
 @router.post("/register", response_model=schemas.User)
 async def register(user_in: schemas.UserCreate):
@@ -33,12 +33,11 @@ async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depen
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=False,  # dev: False, production: True
-        samesite="lax",  # dev: "lax" หรือ "strict"
+        secure=False, 
+        samesite="lax", 
         max_age=7 * 24 * 60 * 60,
     )
 
     return {"message": "login success"}
-
 
 
