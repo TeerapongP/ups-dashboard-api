@@ -107,9 +107,11 @@ GAMATRONIC_OIDS: Dict[str, str] = {
 # -------------------- IP -> OIDs --------------------
 UPS_OID_MAP: Dict[str, Dict[str, Any]] = {
     # กลุ่ม Smart power (HE-1K-IoT / NMC)
-    "10.50.11.62": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "คณะสัตวแพทย์"},
-    "10.50.11.64": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "คณะสัตวแพทย์"},
-    "10.50.11.66": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "คณะสัตวแพทย์"},
+    "10.50.11.64": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "คณะสัตวแพทย์",
+                    "community":"public", "snmp_ver":"1"},
+    "10.50.11.66": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "คณะสัตวแพทย์",
+                    "community":"public", "snmp_ver":"1"},
+
     "10.40.1.10":  {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 1"},
     "10.50.11.21": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 2"},
     "10.50.11.23": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 3"},
@@ -235,14 +237,14 @@ def __ensure_event_loop():
 def _target(ip: str, timeout: float, retries: int) -> UdpTransportTarget:
     return UdpTransportTarget((ip, 161), timeout=timeout, retries=retries)
 
-def snmp_get_many(ip: str, community: str, oids: List[str], timeout=1.2, retries=0) -> Dict[str, Optional[str]]:
+def snmp_get_many(ip: str, community: str, oids: List[str], timeout=1.2, retries=0, comm_obj=None) -> Dict[str, Optional[str]]:
     __ensure_event_loop()
     if not oids:
         return {}
     try:
         it = getCmd(
             SnmpEngine(),
-            CommunityData(community, mpModel=1),
+            comm_obj or CommunityData(community, mpModel=1),
             _target(ip, timeout, retries),
             ContextData(),
             *[ObjectType(ObjectIdentity(oid)) for oid in oids]
@@ -250,18 +252,22 @@ def snmp_get_many(ip: str, community: str, oids: List[str], timeout=1.2, retries
         err, status, index, varBinds = next(it)
         if err or status:
             return {oid: None for oid in oids}
-        return {str(vb[0]): str(vb[1]) for vb in varBinds}
+        out = {}
+        for vb in varBinds:
+            raw = vb[1].prettyPrint() if hasattr(vb[1], "prettyPrint") else str(vb[1])
+            out[str(vb[0])] = None if raw.lower().startswith(("no such", "nosuch")) else raw
+        return out
     except Exception:
         return {oid: None for oid in oids}
 
-def snmp_get(ip: str, community: str, oid: Optional[str], timeout=1.2, retries=0) -> Optional[str]:
+def snmp_get(ip: str, community: str, oid: Optional[str], timeout=1.2, retries=0, comm_obj=None) -> Optional[str]:
     __ensure_event_loop()
     if not oid:
         return None
     try:
         it = getCmd(
             SnmpEngine(),
-            CommunityData(community, mpModel=1),
+            comm_obj or CommunityData(community, mpModel=1),
             _target(ip, timeout, retries),
             ContextData(),
             ObjectType(ObjectIdentity(oid)),
@@ -269,9 +275,12 @@ def snmp_get(ip: str, community: str, oid: Optional[str], timeout=1.2, retries=0
         err, status, index, varBinds = next(it)
         if err or status:
             return None
-        return str(varBinds[0][1])
+        v = varBinds[0][1]
+        raw = v.prettyPrint() if hasattr(v, "prettyPrint") else str(v)
+        return None if raw.lower().startswith(("no such", "nosuch")) else raw
     except Exception:
         return None
+
 
 def to_float(v: Optional[str], scale: float = 1.0) -> float:
     try:
@@ -373,15 +382,15 @@ DEFAULT_TTL = 2.0  # วินาที
 # -------------------- Collector --------------------
 def get_ups_data(ip: str, config: Dict[str, Any], timeout: float = 1.2, retries: int = 0) -> Dict[str, Any]:
     oids, meta = _resolve_oids_and_meta(config)
-    comm = meta["community"]
+    comm_obj = _comm_obj(config, meta["community"])
 
-    # รวม OID ที่ต้องใช้ + ยิงครั้งเดียว
     key_oids = _build_key_oids(oids)
     all_oids: List[str] = []
     for arr in key_oids.values():
         all_oids.extend(arr)
     all_oids = list(dict.fromkeys(all_oids))
-    oid2val = snmp_get_many(ip, comm, all_oids, timeout=timeout, retries=retries)
+
+    oid2val = snmp_get_many(ip, meta["community"], all_oids, timeout=timeout, retries=retries, comm_obj=comm_obj)
 
     # ดึงค่า + scale
     def _g(key: str) -> float:
@@ -477,6 +486,12 @@ def get_ups_data(ip: str, config: Dict[str, Any], timeout: float = 1.2, retries:
         "batteryCount": batt_count,
         "lastBatteryReplaceDate": batt_last_date,
     }
+
+def _comm_obj(cfg: Dict[str, Any], default_comm: str):
+    ver = str(cfg.get("snmp_ver", "2c")).lower()
+    comm = cfg.get("community", default_comm)
+    # v1 => mpModel=0, v2c => mpModel=1
+    return CommunityData(comm, mpModel=0 if ver in ("1", "v1") else 1)
 
 # -------------------- Cache (TTL) --------------------
 _CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
