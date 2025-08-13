@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.auth import router as auth_router
-from app.api.endpoints.endpoints import router as status_router
+from app.api.endpoints.endpoints import router as endpoints_router
 from db.database import Base, engine
 from model.model import User
 
@@ -22,5 +22,5 @@ app.add_middleware(
 )
 
 
-app.include_router(status_router, prefix="/api")
+app.include_router(endpoints_router, prefix="/api")
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
