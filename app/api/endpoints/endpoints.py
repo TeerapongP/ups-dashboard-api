@@ -33,3 +33,5 @@ def read_all(timeout: float = Query(1.0, ge=0.2, le=10.0),
         for f in cf_as_completed(futs):  # ใช้ cf_as_completed แทน asyncio.as_completed
             items.append(f.result())
     return {"count": len(items), "items": items}
+
+
