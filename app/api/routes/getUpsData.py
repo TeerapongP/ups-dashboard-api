@@ -47,38 +47,76 @@ GAMATRONIC_ENTERPRISE: Dict[str, str] = {
 # -------------------- OID Templates (ใช้ UPS-MIB เป็น “ค่าเริ่มต้น”) --------------------
 # หมายเหตุ: จากไฟล์ walk ที่คุณอัปโหลด พบว่า UPS-MIB มีข้อมูลครบกว่าฝั่ง enterprise
 # จึงสลับมาใช้ UPS-MIB เป็น primary แล้วค่อย fallback ไป enterprise
-OID_TEMPLATE: Dict[str, str] = {
+# OID_TEMPLATE: Dict[str, str] = {
+#     # Battery
+#     "battery_percent":      "1.3.6.1.2.1.33.1.2.4.0",   # upsBatteryCharge %
+#     "battery_vdc":          "1.3.6.1.2.1.33.1.2.5.0",   # upsBatteryVoltage (V)
+#     "battery_runtime_min":  "1.3.6.1.2.1.33.1.2.3.0",   # upsEstimatedMinutesRemaining
+#     "temperature_C":        "1.3.6.1.2.1.33.1.2.7.0",   # upsBatteryTemperature (ถัด fallback ไป enterprise หากไม่มี)
+
+#     # Input (per phase) – UPS-MIB: upsInputLineTable
+#     "input_L1_V":           "1.3.6.1.2.1.33.1.3.3.1.3.1",  # upsInputVoltage.1
+#     "input_L2_V":           "1.3.6.1.2.1.33.1.3.3.1.3.2",
+#     "input_L3_V":           "1.3.6.1.2.1.33.1.3.3.1.3.3",
+#     "input_L1_A":           "1.3.6.1.2.1.33.1.3.3.1.4.1",  # upsInputCurrent.1 (tenths A)
+#     "input_L2_A":           "1.3.6.1.2.1.33.1.3.3.1.4.2",
+#     "input_L3_A":           "1.3.6.1.2.1.33.1.3.3.1.4.3",
+#     "input_freq_Hz":        "1.3.6.1.2.1.33.1.3.3.1.2.1",  # upsInputFrequency.1 (tenths Hz)
+
+#     # Output (per phase) – UPS-MIB: upsOutputTable
+#     "output_L1_V":          "1.3.6.1.2.1.33.1.4.4.1.2.1",  # upsOutputVoltage.1
+#     "output_L2_V":          "1.3.6.1.2.1.33.1.4.4.1.2.2",
+#     "output_L3_V":          "1.3.6.1.2.1.33.1.4.4.1.2.3",
+#     "output_L1_A":          "1.3.6.1.2.1.33.1.4.4.1.3.1",  # upsOutputCurrent.1 (tenths A)
+#     "output_L2_A":          "1.3.6.1.2.1.33.1.4.4.1.3.2",
+#     "output_L3_A":          "1.3.6.1.2.1.33.1.4.4.1.3.3",
+#     "output_freq_Hz":       "1.3.6.1.2.1.33.1.4.2.0",      # upsOutputFrequency (Hz)
+
+#     # Load (ถ้ามี)
+#     "load_W":               "1.3.6.1.2.1.33.1.4.4.1.5.1",  # upsOutputPower.1 (W)
+#     "load_VA":              "",                             # ส่วนมากไม่มีใน UPS-MIB -> คำนวณ VA = V*A
+
+#     # Max/Min Input (ส่วนใหญ่เป็น enterprise 935)
+#     "input_max_V":          "1.3.6.1.4.1.935.1.1.1.6.1.6.1",
+#     "input_min_V":          "1.3.6.1.4.1.935.1.1.1.6.1.7.1",
+
+#     # รวม UPS-MIB การระบุตัวตน/เรทติ้ง
+#     **UPS_MIB_IDENT,
+#     **UPS_MIB_RATING,
+# }
+
+OID_TEMPLATE = {
     # Battery
-    "battery_percent":      "1.3.6.1.2.1.33.1.2.4.0",   # upsBatteryCharge %
-    "battery_vdc":          "1.3.6.1.2.1.33.1.2.5.0",   # upsBatteryVoltage (V)
-    "battery_runtime_min":  "1.3.6.1.2.1.33.1.2.3.0",   # upsEstimatedMinutesRemaining
-    "temperature_C":        "1.3.6.1.2.1.33.1.2.7.0",   # upsBatteryTemperature (ถัด fallback ไป enterprise หากไม่มี)
-
-    # Input (per phase) – UPS-MIB: upsInputLineTable
-    "input_L1_V":           "1.3.6.1.2.1.33.1.3.3.1.3.1",  # upsInputVoltage.1
-    "input_L2_V":           "1.3.6.1.2.1.33.1.3.3.1.3.2",
-    "input_L3_V":           "1.3.6.1.2.1.33.1.3.3.1.3.3",
-    "input_L1_A":           "1.3.6.1.2.1.33.1.3.3.1.4.1",  # upsInputCurrent.1 (tenths A)
-    "input_L2_A":           "1.3.6.1.2.1.33.1.3.3.1.4.2",
-    "input_L3_A":           "1.3.6.1.2.1.33.1.3.3.1.4.3",
-    "input_freq_Hz":        "1.3.6.1.2.1.33.1.3.3.1.2.1",  # upsInputFrequency.1 (tenths Hz)
-
-    # Output (per phase) – UPS-MIB: upsOutputTable
-    "output_L1_V":          "1.3.6.1.2.1.33.1.4.4.1.2.1",  # upsOutputVoltage.1
-    "output_L2_V":          "1.3.6.1.2.1.33.1.4.4.1.2.2",
-    "output_L3_V":          "1.3.6.1.2.1.33.1.4.4.1.2.3",
-    "output_L1_A":          "1.3.6.1.2.1.33.1.4.4.1.3.1",  # upsOutputCurrent.1 (tenths A)
-    "output_L2_A":          "1.3.6.1.2.1.33.1.4.4.1.3.2",
-    "output_L3_A":          "1.3.6.1.2.1.33.1.4.4.1.3.3",
-    "output_freq_Hz":       "1.3.6.1.2.1.33.1.4.2.0",      # upsOutputFrequency (Hz)
-
-    # Load (ถ้ามี)
-    "load_W":               "1.3.6.1.2.1.33.1.4.4.1.5.1",  # upsOutputPower.1 (W)
-    "load_VA":              "",                             # ส่วนมากไม่มีใน UPS-MIB -> คำนวณ VA = V*A
-
-    # Max/Min Input (ส่วนใหญ่เป็น enterprise 935)
-    "input_max_V":          "1.3.6.1.4.1.935.1.1.1.6.1.6.1",
-    "input_min_V":          "1.3.6.1.4.1.935.1.1.1.6.1.7.1",
+    "battery_percent":      "1.3.6.1.2.1.33.1.2.4.0",
+    "battery_vdc":          "1.3.6.1.2.1.33.1.2.5.0",
+    "battery_runtime_min":  "1.3.6.1.2.1.33.1.2.3.0",
+    "temperature_C":        "1.3.6.1.2.1.33.1.2.7.0",
+    # Input
+    "input_L1_V": "1.3.6.1.2.1.33.1.3.3.1.3.1",
+    "input_L2_V": "1.3.6.1.2.1.33.1.3.3.1.3.2",
+    "input_L3_V": "1.3.6.1.2.1.33.1.3.3.1.3.3",
+    "input_L1_A": "1.3.6.1.2.1.33.1.3.3.1.4.1",
+    "input_L2_A": "1.3.6.1.2.1.33.1.3.3.1.4.2",
+    "input_L3_A": "1.3.6.1.2.1.33.1.3.3.1.4.3",
+    "input_freq_Hz": "1.3.6.1.2.1.33.1.3.3.1.2.1",
+    # Output
+    "output_L1_V": "1.3.6.1.2.1.33.1.4.4.1.2.1",
+    "output_L2_V": "1.3.6.1.2.1.33.1.4.4.1.2.2",
+    "output_L3_V": "1.3.6.1.2.1.33.1.4.4.1.2.3",
+    "output_L1_A": "1.3.6.1.2.1.33.1.4.4.1.3.1",
+    "output_L2_A": "1.3.6.1.2.1.33.1.4.4.1.3.2",
+    "output_L3_A": "1.3.6.1.2.1.33.1.4.4.1.3.3",
+    "output_freq_Hz": "1.3.6.1.2.1.33.1.4.2.0",
+    # Load
+    "load_W": "1.3.6.1.2.1.33.1.4.4.1.5.1",
+    "load_VA": "",
+    # Ident & Rating
+    "ident_manufacturer": "1.3.6.1.2.1.33.1.1.1.0",
+    "ident_model":        "1.3.6.1.2.1.33.1.1.2.0",
+    "ident_fw":           "1.3.6.1.2.1.33.1.1.3.0",
+    "rating_frequency_hz":      "1.3.6.1.2.1.33.1.9.1.0",
+    "rating_voltage_v":         "1.3.6.1.2.1.33.1.9.2.0",
+    "rating_battery_voltage_v": "1.3.6.1.2.1.33.1.2.5.0",
 
     # รวม UPS-MIB การระบุตัวตน/เรทติ้ง
     **UPS_MIB_IDENT,
