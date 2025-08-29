@@ -1,39 +1,52 @@
-FROM python:3.11-slim as base
+# ---------- Base ----------
+    FROM python:3.11-slim AS base
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-
-WORKDIR /app
-
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY ./app ./app
-
-# Change ownership to non-root user
-RUN chown -R appuser:appuser /app
-USER appuser
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')"
-
-# Expose port
-EXPOSE 8000
-
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    ENV PYTHONUNBUFFERED=1 \
+        PYTHONDONTWRITEBYTECODE=1 \
+        PIP_NO_CACHE_DIR=1 \
+        PIP_DISABLE_PIP_VERSION_CHECK=1
+    
+    WORKDIR /app
+    
+    # ติดตั้ง system dependencies ที่อาจจำเป็นต่อบาง libs
+    RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential curl \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # สร้าง user ปลอดภัย
+    RUN groupadd -r appuser && useradd -r -g appuser appuser
+    
+    # ---------- Dependencies (Production) ----------
+    FROM base AS prod
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+    
+    # Copy source code
+    COPY ./app ./app
+    
+    # เปลี่ยน owner
+    RUN chown -R appuser:appuser /app
+    USER appuser
+    
+    EXPOSE 8000
+    
+    # Healthcheck (ใช้ curl ไม่ต้องพึ่ง requests)
+    HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+        CMD curl -f http://localhost:8000/health || exit 1
+    
+    CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    
+    # ---------- Dependencies (Development) ----------
+    FROM base AS dev
+    COPY requirements-dev.txt .
+    RUN pip install --no-cache-dir -r requirements-dev.txt
+    
+    COPY ./app ./app
+    
+    RUN chown -R appuser:appuser /app
+    USER appuser
+    
+    EXPOSE 8000
+    
+    CMD ["uvicorn", "app.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+    
