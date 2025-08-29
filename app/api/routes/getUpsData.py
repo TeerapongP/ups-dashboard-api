@@ -1,10 +1,9 @@
 # main.py
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI
 from typing import Dict, Any, Optional, List, Tuple
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pysnmp.hlapi import (
     getCmd,
-    nextCmd,
     SnmpEngine,
     CommunityData,
     UdpTransportTarget,
@@ -16,74 +15,141 @@ import datetime, time, asyncio
 
 app = FastAPI(title="UPS Monitor API", version="1.0.0")
 
-# -------------------- UPS-MIB Identification & Ratings --------------------
-UPS_MIB_IDENT: Dict[str, str] = {
-    "ident_manufacturer": "1.3.6.1.2.1.33.1.1.1.0",  # upsIdentManufacturer
-    "ident_model":        "1.3.6.1.2.1.33.1.1.2.0",  # upsIdentModel
-    "ident_fw":           "1.3.6.1.2.1.33.1.1.3.0",  # upsIdentUPSSoftwareVersion
+# =====================[ BRANDS / ENTERPRISE DEFAULTS ]=====================
+UNKNOWN_BRAND = "Unknown"
+SMART_POWER_BRAND = "Smart Power"
+GAMATRONIC_BRAND = "Gamatronic"
+
+GAMATRONIC_OIDS: Dict[str, str] = {}
+GAMATRONIC_ENTERPRISE: Dict[str, str] = {}
+
+# =====================[ UPS-MIB (RFC1628) BASE OIDs ]======================
+UPS_MIB_IDENT = {
+    "ident_manufacturer": "1.3.6.1.2.1.33.1.1.1.0",
+    "ident_model":        "1.3.6.1.2.1.33.1.1.2.0",
+    "ident_fw":           "1.3.6.1.2.1.33.1.1.3.0",
+}
+UPS_MIB_RATING = {
+    "rating_frequency_hz":      "1.3.6.1.2.1.33.1.9.1.0",
+    "rating_voltage_v":         "1.3.6.1.2.1.33.1.9.2.0",
+    "rating_battery_voltage_v": "1.3.6.1.2.1.33.1.2.5.0",
 }
 
-UPS_MIB_RATING: Dict[str, str] = {
-    # มาตรฐาน UPS-MIB (พบได้ในหลายรุ่น)
-    "rating_frequency_hz":      "1.3.6.1.2.1.33.1.9.1.0",  # upsConfigInputFrequency
-    "rating_voltage_v":         "1.3.6.1.2.1.33.1.9.2.0",  # upsConfigInputVoltage
-    "rating_battery_voltage_v": "1.3.6.1.2.1.33.1.2.5.0",  # upsBatteryVoltage (ใช้เป็นแบตรวม/เรทแบต)
-}
-
-# Enterprise placeholders (แก้เป็น OID จริงของรุ่น/ยี่ห้อคุณภายหลัง หากมีคู่มือ)
-APC_ENTERPRISE: Dict[str, str] = {
-    # PowerNet-MIB ตัวอย่าง (อาจต่างตามรุ่น/เฟิร์มแวร์)
-    "battery_last_replace_date": "1.3.6.1.4.1.318.1.1.1.2.2.1.0",
-    "battery_count":             "1.3.6.1.4.1.318.1.1.1.2.2.2.0",
-    "battery_charge_voltage_v":  "1.3.6.1.4.1.318.1.1.1.2.2.3.0",
-}
-
-GAMATRONIC_ENTERPRISE: Dict[str, str] = {
-    "battery_last_replace_date": "1.3.6.1.4.1.6050.0",
-    "battery_count":             "1.3.6.1.4.1.6050.0",
-    "battery_charge_voltage_v":  "1.3.6.1.4.1.6050.0",
-}
-
-# -------------------- OID Templates (ใช้ UPS-MIB เป็น “ค่าเริ่มต้น”) --------------------
-# หมายเหตุ: จากไฟล์ walk ที่คุณอัปโหลด พบว่า UPS-MIB มีข้อมูลครบกว่าฝั่ง enterprise
-# จึงสลับมาใช้ UPS-MIB เป็น primary แล้วค่อย fallback ไป enterprise
-OID_TEMPLATE: Dict[str, str] = {
+OID_TEMPLATE = {
     # Battery
-    "battery_percent":      "1.3.6.1.2.1.33.1.2.4.0",   # upsBatteryCharge %
-    "battery_vdc":          "1.3.6.1.2.1.33.1.2.5.0",   # upsBatteryVoltage (V)
-    "battery_runtime_min":  "1.3.6.1.2.1.33.1.2.3.0",   # upsEstimatedMinutesRemaining
-    "temperature_C":        "1.3.6.1.2.1.33.1.2.7.0",   # upsBatteryTemperature (ถัด fallback ไป enterprise หากไม่มี)
+    "battery_percent":      "1.3.6.1.2.1.33.1.2.4.0",
+    "battery_vdc":          "1.3.6.1.2.1.33.1.2.5.0",
+    "battery_runtime_min":  "1.3.6.1.2.1.33.1.2.3.0",
+    "temperature_C":        "1.3.6.1.2.1.33.1.2.7.0",
 
-    # Input (per phase) – UPS-MIB: upsInputLineTable
-    "input_L1_V":           "1.3.6.1.2.1.33.1.3.3.1.3.1",  # upsInputVoltage.1
-    "input_L2_V":           "1.3.6.1.2.1.33.1.3.3.1.3.2",
-    "input_L3_V":           "1.3.6.1.2.1.33.1.3.3.1.3.3",
-    "input_L1_A":           "1.3.6.1.2.1.33.1.3.3.1.4.1",  # upsInputCurrent.1 (tenths A)
-    "input_L2_A":           "1.3.6.1.2.1.33.1.3.3.1.4.2",
-    "input_L3_A":           "1.3.6.1.2.1.33.1.3.3.1.4.3",
-    "input_freq_Hz":        "1.3.6.1.2.1.33.1.3.3.1.2.1",  # upsInputFrequency.1 (tenths Hz)
+    # Input
+    "input_L1_V":   "1.3.6.1.2.1.33.1.3.3.1.3.1",
+    "input_L2_V":   "1.3.6.1.2.1.33.1.3.3.1.3.2",
+    "input_L3_V":   "1.3.6.1.2.1.33.1.3.3.1.3.3",
+    "input_L1_A":   "1.3.6.1.2.1.33.1.3.3.1.4.1",
+    "input_L2_A":   "1.3.6.1.2.1.33.1.3.3.1.4.2",
+    "input_L3_A":   "1.3.6.1.2.1.33.1.3.3.1.4.3",
+    "input_freq_Hz": ".1.3.6.1.2.1.33.1.3.3.1.2.1",
 
-    # Output (per phase) – UPS-MIB: upsOutputTable
-    "output_L1_V":          "1.3.6.1.2.1.33.1.4.4.1.2.1",  # upsOutputVoltage.1
-    "output_L2_V":          "1.3.6.1.2.1.33.1.4.4.1.2.2",
-    "output_L3_V":          "1.3.6.1.2.1.33.1.4.4.1.2.3",
-    "output_L1_A":          "1.3.6.1.2.1.33.1.4.4.1.3.1",  # upsOutputCurrent.1 (tenths A)
-    "output_L2_A":          "1.3.6.1.2.1.33.1.4.4.1.3.2",
-    "output_L3_A":          "1.3.6.1.2.1.33.1.4.4.1.3.3",
-    "output_freq_Hz":       "1.3.6.1.2.1.33.1.4.2.0",      # upsOutputFrequency (Hz)
+    # Output
+    "output_L1_V":  "1.3.6.1.2.1.33.1.4.4.1.2.1",
+    "output_L2_V":  "1.3.6.1.2.1.33.1.4.4.1.2.2",
+    "output_L3_V":  "1.3.6.1.2.1.33.1.4.4.1.2.3",
+    "output_L1_A":  "1.3.6.1.2.1.33.1.4.4.1.3.1",
+    "output_L2_A":  "1.3.6.1.2.1.33.1.4.4.1.3.2",
+    "output_L3_A":  "1.3.6.1.2.1.33.1.4.4.1.3.3",
+    "output_freq_Hz": "1.3.6.1.2.1.33.1.4.2.0",
+   
 
-    # Load (ถ้ามี)
-    "load_W":               "1.3.6.1.2.1.33.1.4.4.1.5.1",  # upsOutputPower.1 (W)
-    "load_VA":              "",                             # ส่วนมากไม่มีใน UPS-MIB -> คำนวณ VA = V*A
+    # Load
+    "load_W": "1.3.6.1.2.1.33.1.4.4.1.5.1",
+    "load_VA": "",
 
-    # Max/Min Input (ส่วนใหญ่เป็น enterprise 935)
-    "input_max_V":          "1.3.6.1.4.1.935.1.1.1.6.1.6.1",
-    "input_min_V":          "1.3.6.1.4.1.935.1.1.1.6.1.7.1",
-
-    # รวม UPS-MIB การระบุตัวตน/เรทติ้ง
     **UPS_MIB_IDENT,
     **UPS_MIB_RATING,
 }
+
+# ================[ Scale / Fallbacks ]=====================
+SCALE_MAP = {
+    "freqHz": 0.1,
+    "output_L1_A": 0.1, "output_L2_A": 0.1, "output_L3_A": 0.1,
+    "input_L1_A":  0.1, "input_L2_A":  0.1, "input_L3_A":  0.1,
+    "batteryVDC": 0.1,
+}
+
+OID_FALLBACKS: Dict[str, List[str]] = {
+    # Battery
+    "battery_percent": ["1.3.6.1.2.1.33.1.2.4.0"],
+    "battery_vdc":     ["1.3.6.1.2.1.33.1.2.5.0"],
+    "battery_runtime_min": ["1.3.6.1.2.1.33.1.2.3.0"],
+    "temperature_C":        ["1.3.6.1.2.1.33.1.2.7.0"],
+
+    # Input
+    "input_L1_V": ["1.3.6.1.2.1.33.1.3.3.1.3.1", "1.3.6.1.4.1.935.10.1.1.2.16.1.3.1"],
+    "input_L2_V": ["1.3.6.1.2.1.33.1.3.3.1.3.2", "1.3.6.1.4.1.935.10.1.1.2.16.1.3.2"],
+    "input_L3_V": ["1.3.6.1.2.1.33.1.3.3.1.3.3", "1.3.6.1.4.1.935.10.1.1.2.16.1.3.3"],
+    "input_L1_A": ["1.3.6.1.2.1.33.1.3.3.1.4.1", "1.3.6.1.4.1.935.10.1.1.2.16.1.4.1"],
+    "input_L2_A": ["1.3.6.1.2.1.33.1.3.3.1.4.2", "1.3.6.1.4.1.935.10.1.1.2.16.1.4.2"],
+    "input_L3_A": ["1.3.6.1.2.1.33.1.3.3.1.4.3", "1.3.6.1.4.1.935.10.1.1.2.16.1.4.3"],
+    "input_freq_Hz": ["1.3.6.1.2.1.33.1.3.3.1.2.1", "1.3.6.1.4.1.935.10.1.1.2.16.1.2.1"],
+
+    # Output
+    "output_L1_V": ["1.3.6.1.2.1.33.1.4.4.1.2.1", "1.3.6.1.4.1.935.10.1.1.2.18.1.3.1"],
+    "output_L2_V": ["1.3.6.1.2.1.33.1.4.4.1.2.2", "1.3.6.1.4.1.935.10.1.1.2.18.1.3.2"],
+    "output_L3_V": ["1.3.6.1.2.1.33.1.4.4.1.2.3", "1.3.6.1.4.1.935.10.1.1.2.18.1.3.3"],
+    "output_L1_A": ["1.3.6.1.2.1.33.1.4.4.1.3.1", "1.3.6.1.4.1.935.10.1.1.2.18.1.4.1"],
+    "output_L2_A": ["1.3.6.1.2.1.33.1.4.4.1.3.2", "1.3.6.1.4.1.935.10.1.1.2.18.1.4.2"],
+    "output_L3_A": ["1.3.6.1.2.1.33.1.4.4.1.3.3", "1.3.6.1.4.1.935.10.1.1.2.18.1.4.3"],
+    "output_freq_Hz": ["1.3.6.1.2.1.33.1.4.2.0", "1.3.6.1.4.1.935.10.1.1.2.18.1.2.1"],
+
+    # Load
+    "load_W":  ["1.3.6.1.2.1.33.1.4.4.1.5.1", "1.3.6.1.4.1.935.10.1.1.2.18.1.5.1"],
+    "load_VA": ["1.3.6.1.4.1.935.10.1.1.2.18.1.6.1"],
+
+    # Ident & ratings
+    "ident_manufacturer": ["1.3.6.1.2.1.33.1.1.1.0", "1.3.6.1.4.1.935.10.1.1.1.1.0"],
+    "ident_model":        ["1.3.6.1.2.1.33.1.1.2.0", "1.3.6.1.4.1.935.10.1.1.1.2.0"],
+    "ident_fw":           ["1.3.6.1.2.1.33.1.1.3.0", "1.3.6.1.4.1.935.10.1.1.1.3.0"],
+    "rating_voltage_v": [
+        "1.3.6.1.2.1.33.1.9.2.0",
+        "1.3.6.1.4.1.935.10.1.1.2.7.0", # EPPC
+        "1.3.6.1.4.1.935.10.1.1.2.5.0"
+    ],
+    "rating_frequency_hz": [
+        "1.3.6.1.2.1.33.1.9.1.0",
+        "1.3.6.1.4.1.935.10.1.1.2.8.0",
+        "1.3.6.1.4.1.935.10.1.1.2.6.0"
+    ],
+    "rating_battery_voltage_v": ["1.3.6.1.2.1.33.1.2.5.0"],
+}
+
+# =====================[ EPPC OIDs ]=====================
+EPPC_935 = {
+    "ident_manufacturer": "1.3.6.1.4.1.935.10.1.1.1.1.0",
+    "ident_model":        "1.3.6.1.4.1.935.10.1.1.1.2.0",
+    "ident_fw":           "1.3.6.1.4.1.935.10.1.1.1.3.0",
+    "temperature_C":      "1.3.6.1.2.1.33.1.2.7.0",
+    "input_freq_Hz":      "1.3.6.1.2.1.33.1.3.3.1.2.1",
+    "input_L1_V":         "1.3.6.1.2.1.33.1.3.3.1.3.1",
+    "input_L2_V":         "1.3.6.1.4.1.935.10.1.1.2.16.1.3.2",
+    "input_L3_V":         "1.3.6.1.4.1.935.10.1.1.2.16.1.3.3",
+    "input_L1_A":         "1.3.6.1.4.1.935.10.1.1.2.16.1.4.1",
+    "input_L2_A":         "1.3.6.1.4.1.935.10.1.1.2.16.1.4.2",
+    "input_L3_A":         "1.3.6.1.4.1.935.10.1.1.2.16.1.4.3",
+    "output_freq_Hz":     ".1.3.6.1.2.1.33.1.4.2.0",
+    "output_L1_V":        ".1.3.6.1.2.1.33.1.4.4.1.2.1",
+    "output_L2_V":        "1.3.6.1.4.1.935.10.1.1.2.18.1.3.2",
+    "output_L3_V":        "1.3.6.1.4.1.935.10.1.1.2.18.1.3.3",
+    "output_L1_A":        "1.3.6.1.4.1.935.10.1.1.2.18.1.4.1",
+    "output_L2_A":        "1.3.6.1.4.1.935.10.1.1.2.18.1.4.2",
+    "output_L3_A":        "1.3.6.1.4.1.935.10.1.1.2.18.1.4.3",
+    "load_W":             "1.3.6.1.4.1.935.10.1.1.2.18.1.5.1",
+    "load_VA":            "1.3.6.1.4.1.935.10.1.1.2.18.1.6.1",
+    "battery_percent":    "1.3.6.1.4.1.935.10.1.1.3.4.0",
+    "battery_runtime_min":"1.3.6.1.4.1.935.10.1.1.3.3.0",
+    "battery_vdc":        ".1.3.6.1.2.1.33.1.2.5.0",
+}
+
 
 # -------------------- Brand constants --------------------
 SMART_POWER_BRAND = "Smart power "
@@ -106,64 +172,26 @@ GAMATRONIC_OIDS: Dict[str, str] = {
 
 # -------------------- IP -> OIDs --------------------
 UPS_OID_MAP: Dict[str, Dict[str, Any]] = {
-    # กลุ่ม Smart power (HE-1K-IoT / NMC)
-    "10.50.11.64": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "คณะสัตวแพทย์",
-                    "community":"public", "snmp_ver":"1"},
-    "10.50.11.66": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "คณะสัตวแพทย์",
-                    "community":"public", "snmp_ver":"1"},
-
-    "10.40.1.10":  {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 1"},
-    "10.50.11.21": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 2"},
-    "10.50.11.23": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 3"},
-    "10.50.11.25": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 4"},
-    "10.50.11.27": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 5"},
-    "10.50.11.29": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 6"},
-    "10.50.11.31": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 7"},
-    "10.50.11.33": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 8"},
-    "10.50.11.35": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 9 main"},
-    "10.50.11.37": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 9 ชั้น 1"},
-    "10.50.11.39": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 9 ชั้น 2"},
-    "10.50.11.41": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 9 ชั้น 3"},
-    "10.50.11.43": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 10 main"},
-    "10.50.11.45": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 10 ชั้น 1"},
-    "10.50.11.47": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 10 ชั้น 2"},
-    "10.50.11.49": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 10 ชั้น 3"},
-    "10.50.11.51": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 11 main"},
-    "10.50.11.53": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 11 ชั้น 1"},
-    "10.50.11.55": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 11 ชั้น 2"},
-    "10.50.11.57": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "แฟลตบุคลากร 11 ชั้น 3"},
-
-    # Gamatronic
-    "10.50.8.100": {**GAMATRONIC_OIDS, **GAMATRONIC_ENTERPRISE, "brand": GAMATRONIC_BRAND, "model": "Gamatronic", "location": "ศูนย์มหาลัย"},
-    "10.50.11.11": {**GAMATRONIC_OIDS, **GAMATRONIC_ENTERPRISE, "brand": GAMATRONIC_BRAND, "model": "Gamatronic", "location": "ห้องสมุด"},
-
-    # Smart Power / Unknown
-    "10.50.11.12": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": UNKNOWN_BRAND, "model": "HE-1K-IoT", "location": "ห้องสมุด"},
-
-    # หอพัก 25–31
-    "10.50.11.73": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 25 ชั้น 4"},
-    "10.50.11.75": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 26 ชั้น 1"},
-    "10.50.11.77": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 26 ชั้น 2"},
-    "10.50.11.79": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 26 ชั้น 3"},
-    "10.50.11.81": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 26 ชั้น 4"},
-    "10.50.11.83": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 27 ชั้น 1"},
-    "10.50.11.85": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 27 ชั้น 2"},
-    "10.50.11.87": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 27 ชั้น 3"},
-    "10.50.11.89": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 27 ชั้น 4"},
-    "10.50.11.91": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 28 ชั้น 1"},
-    "10.50.11.93": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 28 ชั้น 2"},
-    "10.50.11.97": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 28 ชั้น 4"},
-    "10.50.11.99": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 29 ชั้น 1"},
-    "10.50.11.101": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 29 ชั้น 2"},
-    "10.50.11.103": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 29 ชั้น 3"},
-    "10.50.11.105": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 29 ชั้น 4"},
-    "10.50.11.109": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 30 ชั้น 2"},
-    "10.50.11.111": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 30 ชั้น 3"},
-    "10.50.11.115": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 31 ชั้น 1"},
-    "10.50.11.121": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 31 ชั้น 4"},
-    "10.50.11.123": {**OID_TEMPLATE, **APC_ENTERPRISE, "brand": SMART_POWER_BRAND, "location": "หอพัก 17"},
+   
+    "10.40.1.10": {**OID_TEMPLATE, **EPPC_935,
+                   "brand": SMART_POWER_BRAND, "model": "HE-1K-IoT",
+                   "location": "แฟลตบุคลากร 1"},
+    "10.50.11.11": {**OID_TEMPLATE, **EPPC_935,
+                   "brand": SMART_POWER_BRAND, "model": "HE-1K-IoT",
+                   "location": "สำนักส่งเสริม"},               
+    "10.50.11.12":{**OID_TEMPLATE, **EPPC_935,
+                   "brand": SMART_POWER_BRAND, "model": "HE-1K-IoT",
+                   "location": "ห้องสมุด"},
+    "10.50.11.13": {**OID_TEMPLATE, **EPPC_935,
+                   "brand": SMART_POWER_BRAND, "model": "HE-1K-IoT",
+                   "location": "ห้องสมุด"},
+    "10.50.11.64": {**OID_TEMPLATE, **EPPC_935,
+                   "brand": SMART_POWER_BRAND, "model": "HE-1K-IoT",
+                   "location": "คณะสัตวแพทย์"},
+    # "10.50.8.100":{**OID_TEMPLATE_2 , **EPPC_935_2,
+    #                "brand": SMART_POWER_BRAND, "model": "HE-1K-IoT",
+    #                "location": "คณะสัตวแพทย์"},
 }
-
 
 # -------------------- Scale & Fallbacks --------------------
 SCALE_MAP = {
@@ -179,7 +207,7 @@ OID_FALLBACKS = {
     "battery_percent": ["1.3.6.1.2.1.33.1.2.4.0"],
     "battery_vdc":     ["1.3.6.1.2.1.33.1.2.5.0"],
     "battery_runtime_min": ["1.3.6.1.2.1.33.1.2.3.0"],
-    "temperature_C":   ["1.3.6.1.4.1.935.1.1.1.15.0"],  # enterprise 935 เป็น fallback
+    "temperature_C":   ["1.3.6.1.2.1.33.1.2.7.0"],  # enterprise 935 เป็น fallback
 
     # Input (UPS-MIB fallback)
     "input_L1_V": ["1.3.6.1.2.1.33.1.3.3.1.3.1"],
@@ -287,6 +315,15 @@ def to_float(v: Optional[str], scale: float = 1.0) -> float:
         return float(v) * scale if v is not None else 0.0
     except Exception:
         return 0.0
+
+def fmt2(v: Optional[float]) -> Optional[float]:
+    try:
+        if v is None:
+            return None
+        return round(float(v), 2)
+    except Exception:
+        return None
+
 
 def to_int(v: Optional[str]) -> int:
     try:
@@ -448,44 +485,39 @@ def get_ups_data(ip: str, config: Dict[str, Any], timeout: float = 1.2, retries:
     # ให้ brand/model จาก meta ก่อน ถ้าไม่มีค่อยใช้จาก UPS-MIB
     brand = meta.get("brand") or ident_manufacturer
     model = meta.get("model") or ident_model
+    # ตัดสิน Online/Offline
+    status = "Online" if in_L1V > 0 else "Offline"
 
     return {
-        # --- รูปแบบหลักตามที่ขอ ---
-        "id": f"UPS_{ip.replace('.', '_')}",
-        "status": "Online",
-        "ip": ip,
-        "brand": brand,
-        "model": model,
-        "location": meta.get("location"),
-        "batteryPercent": batt_pct,
-        "batteryVDC": batt_vdc,
-        "backupTimeMin": batt_min,
-        "temperatureC": temp_c,
-        "input": {
-            "L1V": in_L1V, "L2V": in_L2V, "L3V": in_L3V,
-            "L1A": in_L1A, "L2A": in_L2A, "L3A": in_L3A,
-            "freqHz": in_freq
-        },
-        "output": {
-            "L1V": out_L1V, "L2V": out_L2V, "L3V": out_L3V,
-            "L1A": out_L1A, "L2A": out_L2A, "L3A": out_L3A,
-            "freqHz": out_freq
-        },
-        "loadVA": load_va,
-        "loadW":  load_w,
-        "inputMax": in_max,
-        "inputMin": in_min,
+    "id": f"UPS_{ip.replace('.', '_')}",
+    "status": status,
+    "ip": ip,
+    "brand": brand,
+    "model": model,
+    "location": meta.get("location"),
 
-        # --- ฟิลด์เสริม (ถ้ามี) ---
-        "manufacturer": ident_manufacturer,
-        "firmwareVersion": ident_fw,
-        "ratingVoltageV": rating_v,
-        "ratingFrequencyHz": rating_hz,
-        "ratingBatteryVoltageV": rating_batt_v,
-        "batteryChargeVoltageV": batt_charge_v,
-        "batteryCount": batt_count,
-        "lastBatteryReplaceDate": batt_last_date,
+    "batteryPercent": batt_pct,
+    "batteryVDC": fmt2(batt_vdc),
+    "backupTimeMin": batt_min,
+    "temperatureC": temp_c,
+
+    "input": {
+        "L1V": fmt2(in_L1V), "L2V": fmt2(in_L2V), "L3V": fmt2(in_L3V),
+        "L1A": fmt2(in_L1A), "L2A": fmt2(in_L2A), "L3A": fmt2(in_L3A),
+        "freqHz": fmt2(in_freq)
+    },
+    "output": {
+        "L1V": fmt2(out_L1V), "L2V": fmt2(out_L2V), "L3V": fmt2(out_L3V),
+        "L1A": fmt2(out_L1A), "L2A": fmt2(out_L2A), "L3A": fmt2(out_L3A),
+        "freqHz": fmt2(out_freq)
+    },
+
+    "loadVA": load_va,
+    "loadW":  load_w,
+    "inputMax": fmt2(in_max),
+    "inputMin": fmt2(in_min),
     }
+
 
 def _comm_obj(cfg: Dict[str, Any], default_comm: str):
     ver = str(cfg.get("snmp_ver", "2c")).lower()

@@ -7,9 +7,6 @@ from fastapi import APIRouter, HTTPException, Query
 
 router = APIRouter()
 
-@router.get("/status")
-async def status():
-    return {"status": "OK"}
 
 @router.get("/ups/{ip}")
 def read_one(ip: str,

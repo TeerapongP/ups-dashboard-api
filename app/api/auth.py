@@ -4,11 +4,13 @@ from app.auth import crud, schemas
 from core import security as jwt_handler 
 from fastapi import Response
 from model.response_model import MessageResponse
+import os
 
 
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login") 
+IS_DEV = os.getenv("ENV", "dev") == "dev"
 
 @router.post("/register", response_model=schemas.User)
 async def register(user_in: schemas.UserCreate):
@@ -33,11 +35,10 @@ async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depen
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=False, 
-        samesite="lax", 
+        secure=not IS_DEV,                   # dev=False, prod=True
+        samesite="lax" if IS_DEV else "none",# dev=Lax, prod=None
         max_age=7 * 24 * 60 * 60,
+        path="/",                            # ✅ สำคัญ
     )
 
     return {"message": "login success"}
-
-
