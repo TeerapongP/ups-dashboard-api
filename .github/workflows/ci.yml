@@ -1,204 +1,123 @@
-name: FastAPI CI/CD
+name: CI/CD (Docker → Server via SSH)
 
 on:
+  push:
+    branches: [ develop, main ]
   pull_request:
     branches: [ develop ]
 
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  PYTHON_VERSION: '3.11'
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/ups-dashboard   # เปลี่ยนชื่อ image ได้ตามต้องการ
 
 jobs:
-  test:
+  # (ถ้ามี test/lint ให้เพิ่มที่นี่ได้; ด้านล่างคือตัวอย่างสั้นๆ สำหรับ Node/Python — เลือกใช้ตามโปรเจกต์)
+  # node-test:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 20
+  #         cache: 'pnpm'
+  #     - uses: pnpm/action-setup@v2
+  #       with:
+  #         version: 10.11.0
+  #     - run: pnpm install --frozen-lockfile
+  #     - run: pnpm lint && pnpm test --if-present
+
+  # python-test:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: '3.11'
+  #         cache: 'pip'
+  #     - run: |
+  #         python -m pip install --upgrade pip
+  #         pip install -r requirements.txt
+  #         pytest -q || true
+
+  build-and-push:
+    # needs: [node-test, python-test]   # เปิดเมื่อมี job test ด้านบน
     runs-on: ubuntu-latest
-    
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: testdb
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
-          
-      redis:
-        image: redis:7
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-
-    - name: Cache pip dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-asyncio pytest-cov httpx
-
-    - name: Run linting
-      run: |
-        pip install flake8 black isort
-        flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
-        black --check app/
-        isort --check-only app/
-
-    - name: Run tests with coverage
-      env:
-        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
-        REDIS_URL: redis://localhost:6379
-        SECRET_KEY: test-secret-key
-      run: |
-        pytest --cov=app --cov-report=xml --cov-report=html
-
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        fail_ci_if_error: true
-
-  security:
-    runs-on: ubuntu-latest
-    needs: test
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-
-    - name: Install security tools
-      run: |
-        pip install bandit safety
-
-    - name: Run security checks
-      run: |
-        bandit -r app/
-        safety check
-
-  build:
-    runs-on: ubuntu-latest
-    needs: [test, security]
-    if: github.event_name == 'push'
-    
     permissions:
       contents: read
-      packages: write
-
-    outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-      image-digest: ${{ steps.build.outputs.digest }}
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
 
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
+      - name: Login Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: Build and push Docker image
-      id: build
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Docker meta (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch
+            type=sha
 
-  deploy-staging:
+      - name: Build & Push (cache GHA)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
     runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-    
+    needs: build-and-push
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
     steps:
-    - name: Deploy to staging
-      run: |
-        echo "Deploying to staging environment..."
-        # Add your staging deployment commands here
-        # Example: kubectl, docker-compose, or API calls
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}          # เช่น 158.108.196.162 หรือ IP ภายในมหาลัย
+          username: ${{ secrets.SERVER_USER }}      # user ที่อยู่ในกลุ่ม docker
+          key: ${{ secrets.SERVER_SSH_KEY }}        # private key (รูปแบบ OpenSSH)
+          script: |
+            set -e
+            cd /srv/ups-dashboard
+            docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_TOKEN }}"
+            docker compose pull
+            docker compose up -d
+            docker image prune -f
 
-  deploy-production:
+  pr-comment:
     runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    environment: production
-    
+    needs: build-and-push
+    if: github.event_name == 'pull_request'
     steps:
-    - name: Deploy to production
-      run: |
-        echo "Deploying to production environment..."
-        # Add your production deployment commands here
-
-  # Optional: Performance testing
-  performance:
-    runs-on: ubuntu-latest
-    needs: deploy-staging
-    if: github.ref == 'refs/heads/develop'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-
-    - name: Install load testing tools
-      run: |
-        pip install locust
-
-    - name: Run performance tests
-      run: |
-        # Example load test
-        echo "Running performance tests..."
-        # locust -f tests/load_test.py --host=https://staging-api.example.com --users 10 --spawn-rate 2 --run-time 60s --headless
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "✅ Image built & pushed successfully.\nTags: `${{ needs.build-and-push.outputs?.tags || 'see action logs' }}`"
+            })
