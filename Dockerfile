@@ -8,45 +8,30 @@
     
     WORKDIR /app
     
-    # ติดตั้ง system dependencies ที่อาจจำเป็นต่อบาง libs
+    # tools ที่จำเป็นจริง ๆ (เอา curl ไว้ใช้ healthcheck)
     RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential curl \
-        && rm -rf /var/lib/apt/lists/*
+     && rm -rf /var/lib/apt/lists/*
     
-    # สร้าง user ปลอดภัย
+    # user ปลอดภัย
     RUN groupadd -r appuser && useradd -r -g appuser appuser
     
-    # ---------- Dependencies (Production) ----------
+    # ---------- Production ----------
     FROM base AS prod
+    
+    # ติดตั้ง deps ของโปรดักชัน
     COPY requirements.txt .
     RUN pip install --no-cache-dir -r requirements.txt
     
-    # Copy source code
-    COPY ./app ./app
+    # ✅ คัดลอกทั้งโปรเจกต์ (จะมีทั้ง app/ และ db/)
+    COPY . .
     
-    # เปลี่ยน owner
+    # ให้สิทธิ์
     RUN chown -R appuser:appuser /app
     USER appuser
     
     EXPOSE 8000
+
     
-    # Healthcheck (ใช้ curl ไม่ต้องพึ่ง requests)
-    HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-        CMD curl -f http://localhost:8000/health || exit 1
-    
+    # รัน uvicorn
     CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
-    
-    # ---------- Dependencies (Development) ----------
-    FROM base AS dev
-    COPY requirements-dev.txt .
-    RUN pip install --no-cache-dir -r requirements-dev.txt
-    
-    COPY ./app ./app
-    
-    RUN chown -R appuser:appuser /app
-    USER appuser
-    
-    EXPOSE 8000
-    
-    CMD ["uvicorn", "app.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
-    

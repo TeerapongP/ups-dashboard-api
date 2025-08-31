@@ -1,12 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
-from app.auth import crud, schemas
+from app.auth import crud, schemas 
+from app.auth.deps import get_current_user
 from core import security as jwt_handler 
 from fastapi import Response
 from model.response_model import MessageResponse
 import os
-
-
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login") 
@@ -35,10 +34,27 @@ async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depen
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=not IS_DEV,                   # dev=False, prod=True
-        samesite="lax" if IS_DEV else "none",# dev=Lax, prod=None
+        secure=not IS_DEV,                   
+        samesite="lax" if IS_DEV else "none",
         max_age=7 * 24 * 60 * 60,
-        path="/",                            # ✅ สำคัญ
+        path="/",                            
     )
 
     return {"message": "login success"}
+
+@router.get("/me")
+def read_users_me(current_user: schemas.User = Depends(get_current_user)):
+    return {"user": current_user}
+
+
+@router.post("/logout", response_model=MessageResponse)
+async def logout(response: Response):
+    # ลบ cookie โดยการ set max_age = 0
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        samesite="lax" if IS_DEV else "none",
+        secure=not IS_DEV,
+    )
+
+    return {"message": "logout success"}

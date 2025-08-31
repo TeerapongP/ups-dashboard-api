@@ -12,7 +12,7 @@ Base.metadata.create_all(bind=engine)
 
 origins = [
     "http://localhost:3000",
-    # "https://your-production-domain.com",
+    "http://158.108.196.162:3000"
 ]
 
 app.add_middleware(
@@ -28,6 +28,5 @@ app.include_router(
     endpoints_router,
     prefix="/api",
     tags=["ups"],
-    # dependencies=[Depends(get_current_user)]
 )  
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
