@@ -1,7 +1,7 @@
 # Data Processing Utilities
 import datetime
 from typing import Optional, Dict, List, Any
-from .ups_config import SCALE_FACTORS, KEY_TO_SCALE, OID_FALLBACKS
+from app.services.ups_config import SCALE_FACTORS, KEY_TO_SCALE, OID_FALLBACKS
 
 
 def to_float(value: Optional[str], scale: float = 1.0) -> float:

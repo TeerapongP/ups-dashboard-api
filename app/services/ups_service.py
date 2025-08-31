@@ -1,27 +1,24 @@
 # UPS Service Module
 from typing import Dict, Any, List
 from concurrent.futures import ThreadPoolExecutor
-from .ups_config import UPS_DEVICES, DEFAULT_CONFIG
-from .snmp_client import snmp_client
-from .data_utils import OIDResolver, DataProcessor
-from .ups_cache import ups_cache
+from app.services.ups_config import UPS_DEVICES, DEFAULT_CONFIG
+from app.services.snmp_client import snmp_client
+from app.api.routes.data_utils import OIDResolver, DataProcessor
+from app.services.ups_cache import ups_cache
 
 
 class UPSService:
-    """Main service for UPS data collection and management"""
-    
     def __init__(self):
         self.executor = ThreadPoolExecutor(max_workers=10)
     
     def get_ups_data(
-        self, 
+    self, 
         ip: str, 
         timeout: float = None, 
         retries: int = None, 
         use_cache: bool = True,
         cache_ttl: float = None
     ) -> Dict[str, Any]:
-        """Get UPS data for a specific IP address"""
         
         # Get device configuration
         device_config = UPS_DEVICES.get(ip)
@@ -129,11 +126,9 @@ class UPSService:
         return devices
     
     def clear_cache(self) -> None:
-        """Clear all cached UPS data"""
         ups_cache.clear()
     
     def remove_from_cache(self, ip: str) -> None:
-        """Remove specific UPS from cache"""
         ups_cache.remove(ip)
 
 
