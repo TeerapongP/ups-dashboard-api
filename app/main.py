@@ -6,7 +6,7 @@ from app.auth.deps import get_current_user
 
 from db.database import Base, engine
 from model.model import User
-
+from app.scheduler import start_scheduler
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
 
@@ -24,9 +24,14 @@ app.add_middleware(
 )
 
 
+
 app.include_router(
     endpoints_router,
     prefix="/api",
     tags=["ups"],
 )  
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+
+@app.on_event("startup")
+def startup_event():
+    start_scheduler()

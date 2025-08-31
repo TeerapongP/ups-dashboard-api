@@ -5,7 +5,6 @@ from typing import Optional, Dict, Any
 from sqlalchemy import select, func, and_, text
 from sqlalchemy.orm import Session
 from model.model import UPSStatus, UPSDevice 
-from db.ups_db import UPSDevice, UPSStatus, UPSEvent 
 
 TEMP_WARN = 50
 TEMP_CRIT = 60
@@ -15,17 +14,19 @@ BATT_WARN = 20      # %
 BATT_CRIT = 10
 BATT_CLEAR = 25     # hysteresis ปิดเมื่อ > 25%
 
-def _ensure_device(session: Session, snap: Dict[str, Any]) -> str:
-   
-    ups_id = snap.get("id")
-    if not ups_id:
-        # สำรอง: ใช้จาก IP
-        ups_id = f"UPS_{snap['ip'].replace('.', '_')}"
-    dev = session.get(UPSDevice, ups_id)
+def _ensure_device(session: Session, snap: Dict[str, Any]) -> int:
+    """Ensure UPS device exists and return its integer ID"""
+    ip_address = snap.get("ip", "0.0.0.0")
+    
+    # First try to find existing device by IP
+    dev = session.execute(
+        select(UPSDevice).where(UPSDevice.ip_address == ip_address)
+    ).scalars().first()
+    
     if not dev:
+        # Create new device
         dev = UPSDevice(
-            id=ups_id,
-            ip_address=snap.get("ip", "0.0.0.0"),
+            ip_address=ip_address,
             brand=(snap.get("brand") or "Unknown"),
             model=(snap.get("model") or "Unknown"),
             location=(snap.get("location") or "-"),
@@ -35,12 +36,10 @@ def _ensure_device(session: Session, snap: Dict[str, Any]) -> str:
         )
         session.add(dev)
         session.flush()
-    return ups_id
+    
+    return dev.id
 
-def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSStatus:
-    
-    _ensure_device(session, snap)
-    
+def persist_status(session: Session, ups_id: int, snap: dict) -> UPSStatus:
     def safe(v): 
         return None if v is None else v
 
@@ -50,39 +49,107 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
     input_ = snap.get("input") or {}
     output = snap.get("output") or {}
 
-    row = UPSStatus(
-        ups_id=ups_id,
-        timestamp=datetime.utcnow(),
-        status=status,
+    # เก็บ UPSStatus (สถานะล่าสุด)
+    row = session.execute(
+        select(UPSStatus).where(UPSStatus.ups_id == ups_id).order_by(UPSStatus.timestamp.desc())
+    ).scalars().first()
 
-        battery_percentage = safe(snap.get("batteryPercent")),
-        battery_voltage    = safe(snap.get("batteryVDC")),
-        backup_time_minutes= safe(snap.get("backupTimeMin")),
-        temperature        = safe(snap.get("temperatureC")),
+    if row:
+        row.timestamp = datetime.utcnow()
+        row.status = status
+        row.battery_percentage = safe(snap.get("batteryPercent"))
+        row.battery_voltage    = safe(snap.get("batteryVDC"))
+        row.backup_time_minutes= safe(snap.get("backupTimeMin"))
+        row.temperature        = safe(snap.get("temperatureC"))
+        row.input_voltage_l1   = safe(input_.get("L1V"))
+        row.input_voltage_l2   = safe(input_.get("L2V"))
+        row.input_voltage_l3   = safe(input_.get("L3V"))
+        row.input_current_l1   = safe(input_.get("L1A"))
+        row.input_current_l2   = safe(input_.get("L2A"))
+        row.input_current_l3   = safe(input_.get("L3A"))
+        row.input_frequency    = safe(input_.get("freqHz"))
+        row.output_voltage_l1  = safe(output.get("L1V"))
+        row.output_voltage_l2  = safe(output.get("L2V"))
+        row.output_voltage_l3  = safe(output.get("L3V"))
+        row.output_current_l1  = safe(output.get("L1A"))
+        row.output_current_l2  = safe(output.get("L2A"))
+        row.output_current_l3  = safe(output.get("L3A"))
+        row.output_frequency   = safe(output.get("freqHz"))
+        row.output_load_va     = safe(snap.get("loadVA"))
+        row.output_load_w      = safe(snap.get("loadW"))
+        row.load_percentage    = safe(snap.get("loadPct"))
+    else:
+        row = UPSStatus(
+            ups_id=ups_id,
+            timestamp=datetime.utcnow(),
+            status=status,
+            battery_percentage = safe(snap.get("batteryPercent")),
+            battery_voltage    = safe(snap.get("batteryVDC")),
+            backup_time_minutes= safe(snap.get("backupTimeMin")),
+            temperature        = safe(snap.get("temperatureC")),
+            input_voltage_l1   = safe(input_.get("L1V")),
+            input_voltage_l2   = safe(input_.get("L2V")),
+            input_voltage_l3   = safe(input_.get("L3V")),
+            input_current_l1   = safe(input_.get("L1A")),
+            input_current_l2   = safe(input_.get("L2A")),
+            input_current_l3   = safe(input_.get("L3A")),
+            input_frequency    = safe(input_.get("freqHz")),
+            output_voltage_l1  = safe(output.get("L1V")),
+            output_voltage_l2  = safe(output.get("L2V")),
+            output_voltage_l3  = safe(output.get("L3V")),
+            output_current_l1  = safe(output.get("L1A")),
+            output_current_l2  = safe(output.get("L2A")),
+            output_current_l3  = safe(output.get("L3A")),
+            output_frequency   = safe(output.get("freqHz")),
+            output_load_va     = safe(snap.get("loadVA")),
+            output_load_w      = safe(snap.get("loadW")),
+            load_percentage    = safe(snap.get("loadPct")),
+        )
+        session.add(row)
 
-        input_voltage_l1   = safe(input_.get("L1V")),
-        input_voltage_l2   = safe(input_.get("L2V")),
-        input_voltage_l3   = safe(input_.get("L3V")),
-        input_current_l1   = safe(input_.get("L1A")),
-        input_current_l2   = safe(input_.get("L2A")),
-        input_current_l3   = safe(input_.get("L3A")),
-        input_frequency    = safe(input_.get("freqHz")),
-
-        output_voltage_l1  = safe(output.get("L1V")),
-        output_voltage_l2  = safe(output.get("L2V")),
-        output_voltage_l3  = safe(output.get("L3V")),
-        output_current_l1  = safe(output.get("L1A")),
-        output_current_l2  = safe(output.get("L2A")),
-        output_current_l3  = safe(output.get("L3A")),
-        output_frequency   = safe(output.get("freqHz")),
-
-        output_load_va     = safe(snap.get("loadVA")),
-        output_load_w      = safe(snap.get("loadW")),
-        load_percentage    = safe(snap.get("loadPct")),
-    )
-    session.add(row)
     session.flush()
     return row
+
+def aggregate_to_history(session: Session, ups_id: int):
+    now = datetime.utcnow()
+    start = now - timedelta(hours=1)
+
+    q = (
+        session.query(
+            func.avg(UPSStatus.battery_percentage).label("avg_batt"),
+            func.min(UPSStatus.battery_percentage).label("min_batt"),
+            func.max(UPSStatus.battery_percentage).label("max_batt"),
+            func.avg(UPSStatus.temperature).label("avg_temp"),
+            func.min(UPSStatus.temperature).label("min_temp"),
+            func.max(UPSStatus.temperature).label("max_temp"),
+            func.avg(UPSStatus.load_percentage).label("avg_load"),
+            func.avg(UPSStatus.input_voltage_l1).label("avg_input"),
+            func.avg(UPSStatus.output_voltage_l1).label("avg_output"),
+            func.count().label("total_samples")
+        )
+        .filter(and_(UPSStatus.ups_id == ups_id,
+                     UPSStatus.timestamp >= start,
+                     UPSStatus.timestamp < now))
+    )
+
+    data = q.one()
+    if data.total_samples > 0:
+        hist = UPSHistory(
+            ups_id=ups_id,
+            date_hour=start.replace(minute=0, second=0, microsecond=0),
+            avg_battery_percentage=data.avg_batt,
+            avg_temperature=data.avg_temp,
+            avg_load_percentage=data.avg_load,
+            avg_input_voltage=data.avg_input,
+            avg_output_voltage=data.avg_output,
+            min_battery_percentage=data.min_batt,
+            max_battery_percentage=data.max_batt,
+            min_temperature=data.min_temp,
+            max_temperature=data.max_temp,
+            total_samples=data.total_samples,
+        )
+        session.add(hist)
+        session.commit()
 
 def _get_open_event(session: Session, ups_id: str, event_type: str) -> Optional[UPSEvent]:
     stmt = (
