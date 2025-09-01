@@ -30,6 +30,9 @@ class UPSDevice(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     is_active = Column(Boolean, default=True)
+    
+    # Relationship
+    statuses = relationship("UPSStatus", back_populates="device")
 
 class UPSStatus(Base):
     __tablename__ = "ups_status"

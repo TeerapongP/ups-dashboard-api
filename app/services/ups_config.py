@@ -262,6 +262,12 @@ UPS_DEVICES: Dict[str, Dict[str, Any]] = {
         "location": "หอพัก 30 ชั้น 3",
         "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
     },
+    "10.50.13.8": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
 }
 
 # Default configuration values

@@ -57,9 +57,9 @@ def read_all(
         with SessionLocal() as db:
             for snap in items:
                 try:
-                    ups_id = snap.get("id")
-                    if not ups_id:
-                        continue
+                    # Ensure device exists and get integer ID
+                    from app.services.ups_events import _ensure_device
+                    ups_id = _ensure_device(db, snap)
                     persist_status(db, ups_id, snap)
                     log_events_for_snapshot(db, snap)
                 except Exception as e:
