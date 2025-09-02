@@ -24,18 +24,35 @@ def _ensure_device(session: Session, snap: Dict[str, Any]) -> int:
     ).scalars().first()
     
     if not dev:
-        # Create new device
-        dev = UPSDevice(
-            ip_address=ip_address,
-            brand=(snap.get("brand") or "Unknown"),
-            model=(snap.get("model") or "Unknown"),
-            location=(snap.get("location") or "-"),
-            capacity_va= snap.get("capacityVA", 0) or 0,
-            capacity_w=  snap.get("capacityW", 0) or 0,
-            is_active=True,
-        )
-        session.add(dev)
-        session.flush()
+        # Create new device - let the database auto-generate the ID
+        try:
+            dev = UPSDevice(
+                ip_address=ip_address,
+                brand=(snap.get("brand") or "Unknown"),
+                model=(snap.get("model") or "Unknown"),
+                location=(snap.get("location") or "-"),
+                capacity_va= snap.get("capacityVA", 0) or 0,
+                capacity_w=  snap.get("capacityW", 0) or 0,
+                is_active=True,
+            )
+            session.add(dev)
+            session.flush()  # This will populate the auto-generated ID
+        except Exception as e:
+            # If auto-increment fails, the table might be using string IDs
+            # Generate a string ID based on IP address
+            device_id = f"UPS_{ip_address.replace('.', '_')}"
+            dev = UPSDevice(
+                id=device_id,  # Explicitly set string ID
+                ip_address=ip_address,
+                brand=(snap.get("brand") or "Unknown"),
+                model=(snap.get("model") or "Unknown"),
+                location=(snap.get("location") or "-"),
+                capacity_va= snap.get("capacityVA", 0) or 0,
+                capacity_w=  snap.get("capacityW", 0) or 0,
+                is_active=True,
+            )
+            session.add(dev)
+            session.flush()
     
     return dev.id
 

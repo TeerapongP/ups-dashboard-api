@@ -125,29 +125,65 @@ class OIDResolver:
         return None
 
 
+# ... ด้านบนคงเดิม
+
 class DataProcessor:
     """Processes raw SNMP data into structured UPS data"""
     
-    def __init__(self, resolver: OIDResolver):
+    def __init__(self, resolver: OIDResolver, voltage_threshold: float = 180.0):
         self.resolver = resolver
-    
+        self.voltage_threshold = voltage_threshold
+
+    # ---------- helpers ----------
+    @staticmethod
+    def _is_zero(x: Optional[float]) -> bool:
+        """treat None as zero-false; float safe-compare to 0"""
+        if x is None:
+            return False
+        return abs(float(x)) < 1e-6
+
+    def _is_offline(
+        self,
+        in_v: List[Optional[float]],
+        battery_percent: int,
+        battery_vdc: float,
+        battery_runtime: int,
+        temperature: float,
+        load_va: int,
+        load_w: int,
+    ) -> bool:
+        # ทุกเฟส input = 0 และ metrics สำคัญเป็นศูนย์
+        return all([
+            self._is_zero(in_v[0]), self._is_zero(in_v[1]), self._is_zero(in_v[2]),
+            battery_percent == 0,
+            self._is_zero(battery_vdc),
+            battery_runtime == 0,
+            self._is_zero(temperature),
+            load_va == 0,
+            load_w == 0,
+        ])
+
+    def _is_power_fail(self, in_v: List[Optional[float]]) -> bool:
+        v1 = in_v[0]  
+        return v1 is not None and v1 < self.voltage_threshold
+
+
+    # ---------- getters ----------
     def _get_scaled_float(self, key: str, oid_values: Dict[str, Optional[str]]) -> float:
-        """Get float value with appropriate scaling"""
         raw_value = self.resolver.resolve_value(key, oid_values)
         scale_key = KEY_TO_SCALE.get(key)
         scale = SCALE_FACTORS.get(scale_key, 1.0) if scale_key else 1.0
         return to_float(raw_value, scale)
-    
+
     def _get_int(self, key: str, oid_values: Dict[str, Optional[str]]) -> int:
-        """Get integer value"""
         raw_value = self.resolver.resolve_value(key, oid_values)
         return to_int(raw_value)
-    
+
     def _get_string(self, key: str, oid_values: Dict[str, Optional[str]]) -> Optional[str]:
-        """Get string value"""
         raw_value = self.resolver.resolve_value(key, oid_values)
         return to_str(raw_value)
-    
+
+    # ---------- main ----------
     def process_ups_data(
         self, 
         ip: str, 
@@ -155,59 +191,80 @@ class DataProcessor:
         device_config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Process raw OID values into structured UPS data"""
-        
-        # Battery data
+
+        # Battery / thermal
         battery_percent = self._get_int("battery_percent", oid_values)
-        battery_vdc = self._get_scaled_float("battery_vdc", oid_values)
+        battery_vdc_raw = self._get_scaled_float("battery_vdc", oid_values)
         battery_runtime = self._get_int("battery_runtime_min", oid_values)
-        temperature = self._get_scaled_float("temperature_C", oid_values)
-        
-        # Input data
+        temperature_raw = self._get_scaled_float("temperature_C", oid_values)
+
+        # Input (raw first for logic), then formatted for output
+        in_L1_raw = self._get_scaled_float("input_L1_V", oid_values)
+        in_L2_raw = self._get_scaled_float("input_L2_V", oid_values)
+        in_L3_raw = self._get_scaled_float("input_L3_V", oid_values)
+        in_L1 = format_decimal(in_L1_raw)
+        in_L2 = format_decimal(in_L2_raw)
+        in_L3 = format_decimal(in_L3_raw)
+
+        in_A1 = format_decimal(self._get_scaled_float("input_L1_A", oid_values))
+        in_A2 = format_decimal(self._get_scaled_float("input_L2_A", oid_values))
+        in_A3 = format_decimal(self._get_scaled_float("input_L3_A", oid_values))
+        in_f  = format_decimal(self._get_scaled_float("input_freq_Hz", oid_values))
+
         input_data = {
-            "L1V": format_decimal(self._get_scaled_float("input_L1_V", oid_values)),
-            "L2V": format_decimal(self._get_scaled_float("input_L2_V", oid_values)),
-            "L3V": format_decimal(self._get_scaled_float("input_L3_V", oid_values)),
-            "L1A": format_decimal(self._get_scaled_float("input_L1_A", oid_values)),
-            "L2A": format_decimal(self._get_scaled_float("input_L2_A", oid_values)),
-            "L3A": format_decimal(self._get_scaled_float("input_L3_A", oid_values)),
-            "freqHz": format_decimal(self._get_scaled_float("input_freq_Hz", oid_values))
+            "L1V": in_L1, "L2V": in_L2, "L3V": in_L3,
+            "L1A": in_A1, "L2A": in_A2, "L3A": in_A3,
+            "freqHz": in_f,
         }
-        
-        # Output data
+
+        # Output
+        out_L1 = format_decimal(self._get_scaled_float("output_L1_V", oid_values))
+        out_L2 = format_decimal(self._get_scaled_float("output_L2_V", oid_values))
+        out_L3 = format_decimal(self._get_scaled_float("output_L3_V", oid_values))
+        out_A1 = format_decimal(self._get_scaled_float("output_L1_A", oid_values))
+        out_A2 = format_decimal(self._get_scaled_float("output_L2_A", oid_values))
+        out_A3 = format_decimal(self._get_scaled_float("output_L3_A", oid_values))
+        out_f  = format_decimal(self._get_scaled_float("output_freq_Hz", oid_values))
+
         output_data = {
-            "L1V": format_decimal(self._get_scaled_float("output_L1_V", oid_values)),
-            "L2V": format_decimal(self._get_scaled_float("output_L2_V", oid_values)),
-            "L3V": format_decimal(self._get_scaled_float("output_L3_V", oid_values)),
-            "L1A": format_decimal(self._get_scaled_float("output_L1_A", oid_values)),
-            "L2A": format_decimal(self._get_scaled_float("output_L2_A", oid_values)),
-            "L3A": format_decimal(self._get_scaled_float("output_L3_A", oid_values)),
-            "freqHz": format_decimal(self._get_scaled_float("output_freq_Hz", oid_values))
+            "L1V": out_L1, "L2V": out_L2, "L3V": out_L3,
+            "L1A": out_A1, "L2A": out_A2, "L3A": out_A3,
+            "freqHz": out_f,
         }
-        
-        # Load data
+
+        # Load
         load_va = self._get_int("load_VA", oid_values)
-        load_w = self._get_int("load_W", oid_values)
-        
-        # Calculate load if not available from SNMP
+        load_w  = self._get_int("load_W", oid_values)
+
+        # ถ้า SNMP ไม่มีค่า load → คำนวณจาก Output L1 (เดี่ยว/ตัวแทนเฟส)
         if not load_va and output_data["L1V"] and output_data["L1A"]:
             load_va = round(output_data["L1V"] * output_data["L1A"])
-        
         if not load_w and output_data["L1V"] and output_data["L1A"]:
-            power_factor = device_config.get("power_factor", 0.8)
-            load_w = round(output_data["L1V"] * output_data["L1A"] * power_factor)
-        
-        # Device identification
+            pf = device_config.get("power_factor", 0.8)
+            load_w = round(output_data["L1V"] * output_data["L1A"] * pf)
+
+        # Identification
         brand = device_config.get("brand") or self._get_string("ident_manufacturer", oid_values)
         model = device_config.get("model") or self._get_string("ident_model", oid_values)
-        
-        # Status determination
-        if input_data["L1V"] == 0 and input_data["L2V"] == 0 and input_data["L3V"] == 0:
+
+        # --------- Status ----------
+        in_volt_list = [in_L1_raw, in_L2_raw, in_L3_raw]
+
+        if self._is_offline(
+            in_volt_list,
+            battery_percent=battery_percent,
+            battery_vdc=battery_vdc_raw,
+            battery_runtime=battery_runtime,
+            temperature=temperature_raw,
+            load_va=load_va,
+            load_w=load_w,
+        ):
             status = "Offline"
-        elif input_data["L1V"] is not None and input_data["L1V"] < 180:
+        elif self._is_power_fail(in_volt_list):
             status = "PowerFail"
         else:
             status = "Online"
-        
+
         return {
             "id": f"UPS_{ip.replace('.', '_')}",
             "status": status,
@@ -216,9 +273,9 @@ class DataProcessor:
             "model": model,
             "location": device_config.get("location"),
             "batteryPercent": battery_percent,
-            "batteryVDC": format_decimal(battery_vdc/10),
+            "batteryVDC": format_decimal(battery_vdc_raw/10),  
             "backupTimeMin": battery_runtime,
-            "temperatureC": temperature,
+            "temperatureC": format_decimal(temperature_raw),
             "input": input_data,
             "output": output_data,
             "loadVA": load_va,
