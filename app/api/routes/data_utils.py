@@ -201,7 +201,12 @@ class DataProcessor:
         model = device_config.get("model") or self._get_string("ident_model", oid_values)
         
         # Status determination
-        status = "Online" if input_data["L1V"] and input_data["L1V"] > 0 else "Offline"
+        if input_data["L1V"] == 0 and input_data["L2V"] == 0 and input_data["L3V"] == 0:
+            status = "Offline"
+        elif input_data["L1V"] is not None and input_data["L1V"] < 180:
+            status = "PowerFail"
+        else:
+            status = "Online"
         
         return {
             "id": f"UPS_{ip.replace('.', '_')}",
@@ -211,7 +216,7 @@ class DataProcessor:
             "model": model,
             "location": device_config.get("location"),
             "batteryPercent": battery_percent,
-            "batteryVDC": format_decimal(battery_vdc),
+            "batteryVDC": format_decimal(battery_vdc/10),
             "backupTimeMin": battery_runtime,
             "temperatureC": temperature,
             "input": input_data,
