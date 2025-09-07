@@ -1,14 +1,13 @@
-# app/api/endpoints/endpoints.py
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import as_completed as cf_as_completed  
+from concurrent.futures import as_completed as cf_as_completed
 from app.services.ups_config import UPS_DEVICES, DEFAULT_CONFIG
 from app.api.routes.getUpsData import get_ups_data, get_ups_data_cached
 from app.services.ups_service import ups_service
 from fastapi import APIRouter, HTTPException, Query
 from concurrent.futures import as_completed
 from db.database import SessionLocal
-from app.services.ups_events import persist_status, log_events_for_snapshot   
+from app.services.ups_events import persist_status, log_events_for_snapshot
 
 router = APIRouter()
 
@@ -52,19 +51,17 @@ def read_all(
             except Exception as e:
                 items.append({"status": "Error", "error": str(e)})
 
-    # persist ลง DB
     if persist:
         with SessionLocal() as db:
             for snap in items:
                 try:
-                    # Ensure device exists and get integer ID
                     from app.services.ups_events import _ensure_device
                     ups_id = _ensure_device(db, snap)
                     persist_status(db, ups_id, snap)
                     log_events_for_snapshot(db, snap)
                 except Exception as e:
                     print(f"[persist/log] error for {snap.get('id')}: {e}")
-                    db.rollback()  # Rollback this transaction and continue with next
+                    db.rollback()
                     continue
             try:
                 db.commit()

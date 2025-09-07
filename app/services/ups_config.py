@@ -1,12 +1,9 @@
-# UPS Configuration and Constants
 from typing import Dict, List, Any
 
-# Brand Constants
 UNKNOWN_BRAND = "Unknown"
 SMART_POWER_BRAND = "Smart Power"
 GAMATRONIC_BRAND = "Gamatronic"
 
-# UPS-MIB (RFC1628) Base OIDs
 UPS_MIB_IDENTS = {
     "ident_manufacturer": "1.3.6.1.2.1.33.1.1.1.0",
     "ident_model": "1.3.6.1.2.1.33.1.1.2.0",
@@ -19,49 +16,41 @@ UPS_MIB_RATINGS = {
     "rating_battery_voltage_v": "1.3.6.1.2.1.33.1.2.5.0",
 }
 
-# Standard UPS-MIB OIDs
 STANDARD_OIDS = {
-    # Battery (UPS-MIB / RFC1628)
-    "battery_percent": "1.3.6.1.2.1.33.1.2.4.0",   # %
-    "battery_vdc": "1.3.6.1.2.1.33.1.2.5.0",       # 0.1 V  -> divide by 10
+    "battery_percent": "1.3.6.1.2.1.33.1.2.4.0",
+    "battery_vdc": "1.3.6.1.2.1.33.1.2.5.0",
     "battery_runtime_min": "1.3.6.1.2.1.33.1.2.3.0",
     "temperature_C": "1.3.6.1.2.1.33.1.2.7.0",
 
-    # Input (per line index 1..N)
     "input_L1_V": "1.3.6.1.2.1.33.1.3.3.1.3.1",
     "input_L2_V": "1.3.6.1.2.1.33.1.3.3.1.3.2",
     "input_L3_V": "1.3.6.1.2.1.33.1.3.3.1.3.3",
-    "input_L1_A": "1.3.6.1.2.1.33.1.3.3.1.4.1",    # 0.1 A -> divide by 10
+    "input_L1_A": "1.3.6.1.2.1.33.1.3.3.1.4.1",
     "input_L2_A": "1.3.6.1.2.1.33.1.3.3.1.4.2",
     "input_L3_A": "1.3.6.1.2.1.33.1.3.3.1.4.3",
-    "input_freq_L1_Hz": "1.3.6.1.2.1.33.1.3.3.1.2.1",  # 0.1 Hz -> /10
+    "input_freq_L1_Hz": "1.3.6.1.2.1.33.1.3.3.1.2.1",
     "input_freq_L2_Hz": "1.3.6.1.2.1.33.1.3.3.1.2.2",
     "input_freq_L3_Hz": "1.3.6.1.2.1.33.1.3.3.1.2.3",
 
-    # Output
-    "output_freq_Hz": "1.3.6.1.2.1.33.1.4.2.0",   # 0.1 Hz -> /10
+    "output_freq_Hz": "1.3.6.1.2.1.33.1.4.2.0",
     "output_L1_V": "1.3.6.1.2.1.33.1.4.4.1.2.1",
     "output_L2_V": "1.3.6.1.2.1.33.1.4.4.1.2.2",
     "output_L3_V": "1.3.6.1.2.1.33.1.4.4.1.2.3",
-    "output_L1_A": "1.3.6.1.2.1.33.1.4.4.1.3.1",  # 0.1 A -> /10
+    "output_L1_A": "1.3.6.1.2.1.33.1.4.4.1.3.1",
     "output_L2_A": "1.3.6.1.2.1.33.1.4.4.1.3.2",
     "output_L3_A": "1.3.6.1.2.1.33.1.4.4.1.3.3",
 
-    # Load (แก้ตำแหน่ง)
-    "load_W_L1": "1.3.6.1.2.1.33.1.4.4.1.4.1",    # Watts
+    "load_W_L1": "1.3.6.1.2.1.33.1.4.4.1.4.1",
     "load_W_L2": "1.3.6.1.2.1.33.1.4.4.1.4.2",
     "load_W_L3": "1.3.6.1.2.1.33.1.4.4.1.4.3",
     "load_percent_L1": "1.3.6.1.2.1.33.1.4.4.1.5.1",
     "load_percent_L2": "1.3.6.1.2.1.33.1.4.4.1.5.2",
     "load_percent_L3": "1.3.6.1.2.1.33.1.4.4.1.5.3",
 
-    # (ไม่มี load_VA มาตรฐาน ณ ขณะนี้; ถ้าต้องการ current VA ให้คำนวณเองหรือใช้ Enterprise MIB)
     **UPS_MIB_IDENTS,
     **UPS_MIB_RATINGS,
 }
 
-
-# EPPC Enterprise OIDs (935)
 EPPC_935_OIDS = {
     "ident_manufacturer": "1.3.6.1.4.1.935.10.1.1.1.1.0",
     "ident_model": "1.3.6.1.4.1.935.10.1.1.1.2.0",
@@ -82,7 +71,6 @@ EPPC_935_OIDS = {
     "battery_runtime_min": "1.3.6.1.4.1.935.10.1.1.3.3.0",
 }
 
-# Scale factors for different measurements
 SCALE_FACTORS = {
     "freqHz": 0.1,
     "output_L1_A": 0.1,
@@ -94,7 +82,6 @@ SCALE_FACTORS = {
     "batteryVDC": 1.0,
 }
 
-# Mapping of data keys to scale factor keys
 KEY_TO_SCALE = {
     "battery_vdc": "batteryVDC",
     "input_freq_Hz": "freqHz",
@@ -107,15 +94,12 @@ KEY_TO_SCALE = {
     "input_L3_A": "input_L3_A",
 }
 
-# OID fallback chains
 OID_FALLBACKS: Dict[str, List[str]] = {
-    # Battery
     "battery_percent": ["1.3.6.1.2.1.33.1.2.4.0"],
     "battery_vdc": ["1.3.6.1.2.1.33.1.2.5.0"],
     "battery_runtime_min": ["1.3.6.1.2.1.33.1.2.3.0"],
     "temperature_C": ["1.3.6.1.2.1.33.1.2.7.0"],
     
-    # Input
     "input_L1_V": ["1.3.6.1.2.1.33.1.3.3.1.3.1", "1.3.6.1.4.1.935.10.1.1.2.16.1.3.1"],
     "input_L2_V": ["1.3.6.1.2.1.33.1.3.3.1.3.2", "1.3.6.1.4.1.935.10.1.1.2.16.1.3.2"],
     "input_L3_V": ["1.3.6.1.2.1.33.1.3.3.1.3.3", "1.3.6.1.4.1.935.10.1.1.2.16.1.3.3"],
@@ -124,7 +108,6 @@ OID_FALLBACKS: Dict[str, List[str]] = {
     "input_L3_A": ["1.3.6.1.2.1.33.1.3.3.1.4.3", "1.3.6.1.4.1.935.10.1.1.2.16.1.4.3"],
     "input_freq_Hz": ["1.3.6.1.2.1.33.1.3.3.1.2.1", "1.3.6.1.4.1.935.10.1.1.2.16.1.2.1"],
     
-    # Output
     "output_L1_V": ["1.3.6.1.2.1.33.1.4.4.1.2.1", "1.3.6.1.4.1.935.10.1.1.2.18.1.3.1"],
     "output_L2_V": ["1.3.6.1.2.1.33.1.4.4.1.2.2", "1.3.6.1.4.1.935.10.1.1.2.18.1.3.2"],
     "output_L3_V": ["1.3.6.1.2.1.33.1.4.4.1.2.3", "1.3.6.1.4.1.935.10.1.1.2.18.1.3.3"],
@@ -133,11 +116,9 @@ OID_FALLBACKS: Dict[str, List[str]] = {
     "output_L3_A": ["1.3.6.1.2.1.33.1.4.4.1.3.3", "1.3.6.1.4.1.935.10.1.1.2.18.1.4.3"],
     "output_freq_Hz": ["1.3.6.1.2.1.33.1.4.2.0", "1.3.6.1.4.1.935.10.1.1.2.18.1.2.1"],
     
-    # Load
     "load_W": ["1.3.6.1.2.1.33.1.4.4.1.5.1", "1.3.6.1.4.1.935.10.1.1.2.18.1.5.1"],
     "load_VA": ["1.3.6.1.4.1.935.10.1.1.2.18.1.6.1"],
     
-    # Identification & ratings
     "ident_manufacturer": ["1.3.6.1.2.1.33.1.1.1.0", "1.3.6.1.4.1.935.10.1.1.1.1.0"],
     "ident_model": ["1.3.6.1.2.1.33.1.1.2.0", "1.3.6.1.4.1.935.10.1.1.1.2.0"],
     "ident_fw": ["1.3.6.1.2.1.33.1.1.3.0", "1.3.6.1.4.1.935.10.1.1.1.3.0"],
@@ -154,7 +135,6 @@ OID_FALLBACKS: Dict[str, List[str]] = {
     "rating_battery_voltage_v": ["1.3.6.1.2.1.33.1.2.5.0"],
 }
 
-# UPS Device Configuration
 UPS_DEVICES: Dict[str, Dict[str, Any]] = {
     "10.40.1.10": {
         "brand": SMART_POWER_BRAND,
@@ -272,7 +252,6 @@ UPS_DEVICES: Dict[str, Dict[str, Any]] = {
     },
 }
 
-# Default configuration values
 DEFAULT_CONFIG = {
     "community": "public",
     "snmp_version": "2c",

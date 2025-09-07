@@ -1,4 +1,3 @@
-# SNMP Client Module
 import asyncio
 from typing import Dict, List, Optional, Any
 from pysnmp.hlapi import (
@@ -11,15 +10,12 @@ from pysnmp.hlapi import (
     ObjectIdentity,
 )
 
-
 class SNMPClient:
-    """SNMP client for UPS monitoring"""
     
     def __init__(self):
         self._ensure_event_loop()
     
     def _ensure_event_loop(self):
-        """Ensure asyncio event loop exists"""
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -27,11 +23,9 @@ class SNMPClient:
             asyncio.set_event_loop(loop)
     
     def _create_target(self, ip: str, timeout: float, retries: int) -> UdpTransportTarget:
-        """Create SNMP target"""
         return UdpTransportTarget((ip, 161), timeout=timeout, retries=retries)
     
     def _create_community(self, community: str, version: str = "2c") -> CommunityData:
-        """Create SNMP community data"""
         mp_model = 0 if version.lower() in ("1", "v1") else 1
         return CommunityData(community, mpModel=mp_model)
     
@@ -44,7 +38,6 @@ class SNMPClient:
         retries: int = 0,
         version: str = "2c"
     ) -> Optional[str]:
-        """Get single OID value"""
         if not oid:
             return None
             
@@ -68,7 +61,6 @@ class SNMPClient:
             value = var_binds[0][1]
             raw_value = value.prettyPrint() if hasattr(value, "prettyPrint") else str(value)
             
-            # Check for "No Such" responses
             if raw_value.lower().startswith(("no such", "nosuch")):
                 return None
                 
@@ -86,7 +78,6 @@ class SNMPClient:
         retries: int = 0,
         version: str = "2c"
     ) -> Dict[str, Optional[str]]:
-        """Get multiple OID values in a single request"""
         if not oids:
             return {}
             
@@ -113,7 +104,6 @@ class SNMPClient:
                 value = var_bind[1]
                 raw_value = value.prettyPrint() if hasattr(value, "prettyPrint") else str(value)
                 
-                # Check for "No Such" responses
                 if raw_value.lower().startswith(("no such", "nosuch")):
                     result[oid_str] = None
                 else:
@@ -124,6 +114,4 @@ class SNMPClient:
         except Exception:
             return {oid: None for oid in oids}
 
-
-# Global SNMP client instance
 snmp_client = SNMPClient()

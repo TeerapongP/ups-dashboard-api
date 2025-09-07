@@ -7,15 +7,12 @@ from datetime import datetime
 
 from db.database import Base
 
-
-
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, nullable=False, index=True)
-    password = Column(String(100), nullable=False)  
-
+    password = Column(String(100), nullable=False)
 
 class UPSDevice(Base):
     __tablename__ = "ups_devices"
@@ -31,7 +28,6 @@ class UPSDevice(Base):
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     is_active = Column(Boolean, default=True)
     
-    # Relationship
     statuses = relationship("UPSStatus", back_populates="device")
 
 class UPSStatus(Base):

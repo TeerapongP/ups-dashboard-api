@@ -1,35 +1,26 @@
-# Data Processing Utilities
 import datetime
 from typing import Optional, Dict, List, Any
 from app.services.ups_config import SCALE_FACTORS, KEY_TO_SCALE, OID_FALLBACKS
 
-
 def to_float(value: Optional[str], scale: float = 1.0) -> float:
-    """Convert string value to float with scaling"""
     try:
         return float(value) * scale if value is not None else 0.0
     except (ValueError, TypeError):
         return 0.0
 
-
 def to_int(value: Optional[str]) -> int:
-    """Convert string value to integer"""
     try:
         return int(float(value)) if value is not None else 0
     except (ValueError, TypeError):
         return 0
 
-
 def to_str(value: Optional[str]) -> Optional[str]:
-    """Clean and normalize string value"""
     if value is None:
         return None
     cleaned = str(value).strip().strip('"')
     return cleaned if cleaned else None
 
-
 def format_decimal(value: Optional[float], decimals: int = 2) -> Optional[float]:
-    """Format float to specified decimal places"""
     try:
         if value is None:
             return None
@@ -37,9 +28,7 @@ def format_decimal(value: Optional[float], decimals: int = 2) -> Optional[float]
     except (ValueError, TypeError):
         return None
 
-
 def parse_date(value: Optional[str]) -> Optional[str]:
-    """Parse various date formats to ISO format"""
     cleaned_value = to_str(value)
     if not cleaned_value:
         return None
@@ -58,31 +47,24 @@ def parse_date(value: Optional[str]) -> Optional[str]:
         except ValueError:
             continue
     
-    return cleaned_value  # Return original if parsing fails
-
+    return cleaned_value
 
 class OIDResolver:
-    """Resolves OID values with fallback support"""
     
     def __init__(self, oid_config: Dict[str, str]):
         self.oid_config = oid_config
         self.key_oids = self._build_key_oids()
     
     def _build_key_oids(self) -> Dict[str, List[str]]:
-        """Build mapping of data keys to OID lists (primary + fallbacks)"""
         key_oids = {}
         
         data_keys = [
-            # Battery
             "battery_percent", "battery_vdc", "battery_runtime_min", "temperature_C",
-            # Input/Output
             "input_L1_V", "input_L2_V", "input_L3_V", 
             "input_L1_A", "input_L2_A", "input_L3_A", "input_freq_Hz",
             "output_L1_V", "output_L2_V", "output_L3_V",
             "output_L1_A", "output_L2_A", "output_L3_A", "output_freq_Hz",
-            # Load
             "load_VA", "load_W",
-            # Identification & ratings
             "ident_manufacturer", "ident_model", "ident_fw",
             "rating_voltage_v", "rating_frequency_hz", "rating_battery_voltage_v",
         ]
@@ -90,14 +72,11 @@ class OIDResolver:
         for key in data_keys:
             oid_list = []
             
-            # Add primary OID if exists
             if key in self.oid_config and self.oid_config[key]:
                 oid_list.append(self.oid_config[key])
             
-            # Add fallback OIDs
             oid_list.extend(OID_FALLBACKS.get(key, []))
             
-            # Remove duplicates while preserving order
             unique_oids = []
             seen = set()
             for oid in oid_list:
@@ -110,34 +89,26 @@ class OIDResolver:
         return key_oids
     
     def get_all_oids(self) -> List[str]:
-        """Get all unique OIDs needed for data collection"""
         all_oids = []
         for oid_list in self.key_oids.values():
             all_oids.extend(oid_list)
-        return list(dict.fromkeys(all_oids))  # Remove duplicates
+        return list(dict.fromkeys(all_oids))
     
     def resolve_value(self, key: str, oid_values: Dict[str, Optional[str]]) -> Optional[str]:
-        """Resolve value for a key using primary OID and fallbacks"""
         for oid in self.key_oids.get(key, []):
             value = oid_values.get(oid)
             if value is not None and value != "0":
                 return value
         return None
 
-
-# ... ด้านบนคงเดิม
-
 class DataProcessor:
-    """Processes raw SNMP data into structured UPS data"""
     
     def __init__(self, resolver: OIDResolver, voltage_threshold: float = 180.0):
         self.resolver = resolver
         self.voltage_threshold = voltage_threshold
 
-    # ---------- helpers ----------
     @staticmethod
     def _is_zero(x: Optional[float]) -> bool:
-        """treat None as zero-false; float safe-compare to 0"""
         if x is None:
             return False
         return abs(float(x)) < 1e-6
@@ -152,7 +123,6 @@ class DataProcessor:
         load_va: int,
         load_w: int,
     ) -> bool:
-        # ทุกเฟส input = 0 และ metrics สำคัญเป็นศูนย์
         return all([
             self._is_zero(in_v[0]), self._is_zero(in_v[1]), self._is_zero(in_v[2]),
             battery_percent == 0,
@@ -164,11 +134,9 @@ class DataProcessor:
         ])
 
     def _is_power_fail(self, in_v: List[Optional[float]]) -> bool:
-        v1 = in_v[0]  
+        v1 = in_v[0]
         return v1 is not None and v1 < self.voltage_threshold
 
-
-    # ---------- getters ----------
     def _get_scaled_float(self, key: str, oid_values: Dict[str, Optional[str]]) -> float:
         raw_value = self.resolver.resolve_value(key, oid_values)
         scale_key = KEY_TO_SCALE.get(key)
@@ -183,22 +151,18 @@ class DataProcessor:
         raw_value = self.resolver.resolve_value(key, oid_values)
         return to_str(raw_value)
 
-    # ---------- main ----------
     def process_ups_data(
         self, 
         ip: str, 
         oid_values: Dict[str, Optional[str]], 
         device_config: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Process raw OID values into structured UPS data"""
 
-        # Battery / thermal
         battery_percent = self._get_int("battery_percent", oid_values)
         battery_vdc_raw = self._get_scaled_float("battery_vdc", oid_values)
         battery_runtime = self._get_int("battery_runtime_min", oid_values)
         temperature_raw = self._get_scaled_float("temperature_C", oid_values)
 
-        # Input (raw first for logic), then formatted for output
         in_L1_raw = self._get_scaled_float("input_L1_V", oid_values)
         in_L2_raw = self._get_scaled_float("input_L2_V", oid_values)
         in_L3_raw = self._get_scaled_float("input_L3_V", oid_values)
@@ -217,7 +181,6 @@ class DataProcessor:
             "freqHz": in_f,
         }
 
-        # Output
         out_L1 = format_decimal(self._get_scaled_float("output_L1_V", oid_values))
         out_L2 = format_decimal(self._get_scaled_float("output_L2_V", oid_values))
         out_L3 = format_decimal(self._get_scaled_float("output_L3_V", oid_values))
@@ -232,22 +195,18 @@ class DataProcessor:
             "freqHz": out_f,
         }
 
-        # Load
         load_va = self._get_int("load_VA", oid_values)
         load_w  = self._get_int("load_W", oid_values)
 
-        # ถ้า SNMP ไม่มีค่า load → คำนวณจาก Output L1 (เดี่ยว/ตัวแทนเฟส)
         if not load_va and output_data["L1V"] and output_data["L1A"]:
             load_va = round(output_data["L1V"] * output_data["L1A"])
         if not load_w and output_data["L1V"] and output_data["L1A"]:
             pf = device_config.get("power_factor", 0.8)
             load_w = round(output_data["L1V"] * output_data["L1A"] * pf)
 
-        # Identification
         brand = device_config.get("brand") or self._get_string("ident_manufacturer", oid_values)
         model = device_config.get("model") or self._get_string("ident_model", oid_values)
 
-        # --------- Status ----------
         in_volt_list = [in_L1_raw, in_L2_raw, in_L3_raw]
 
         if self._is_offline(
@@ -273,7 +232,7 @@ class DataProcessor:
             "model": model,
             "location": device_config.get("location"),
             "batteryPercent": battery_percent,
-            "batteryVDC": format_decimal(battery_vdc_raw/10),  
+            "batteryVDC": format_decimal(battery_vdc_raw/10),
             "backupTimeMin": battery_runtime,
             "temperatureC": format_decimal(temperature_raw),
             "input": input_data,

@@ -1,30 +1,26 @@
-# services/ups_events.py
 from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Dict, Any
 from sqlalchemy import select, func, and_, text
 from sqlalchemy.orm import Session
-from model.model import UPSStatus, UPSDevice 
+from model.model import UPSStatus, UPSDevice
 
 TEMP_WARN = 50
 TEMP_CRIT = 60
-TEMP_CLEAR = 45      # hysteresis ปิดเมื่อ < 45°C
+TEMP_CLEAR = 45
 
-BATT_WARN = 20      # %
+BATT_WARN = 20
 BATT_CRIT = 10
-BATT_CLEAR = 25     # hysteresis ปิดเมื่อ > 25%
+BATT_CLEAR = 25
 
 def _ensure_device(session: Session, snap: Dict[str, Any]) -> int:
-    """Ensure UPS device exists and return its integer ID"""
     ip_address = snap.get("ip", "0.0.0.0")
     
-    # First try to find existing device by IP
     dev = session.execute(
         select(UPSDevice).where(UPSDevice.ip_address == ip_address)
     ).scalars().first()
     
     if not dev:
-        # Create new device - let the database auto-generate the ID
         try:
             dev = UPSDevice(
                 ip_address=ip_address,
@@ -36,13 +32,11 @@ def _ensure_device(session: Session, snap: Dict[str, Any]) -> int:
                 is_active=True,
             )
             session.add(dev)
-            session.flush()  # This will populate the auto-generated ID
+            session.flush()
         except Exception as e:
-            # If auto-increment fails, the table might be using string IDs
-            # Generate a string ID based on IP address
             device_id = f"UPS_{ip_address.replace('.', '_')}"
             dev = UPSDevice(
-                id=device_id,  # Explicitly set string ID
+                id=device_id,
                 ip_address=ip_address,
                 brand=(snap.get("brand") or "Unknown"),
                 model=(snap.get("model") or "Unknown"),
@@ -66,7 +60,6 @@ def persist_status(session: Session, ups_id: int, snap: dict) -> UPSStatus:
     input_ = snap.get("input") or {}
     output = snap.get("output") or {}
 
-    # เก็บ UPSStatus (สถานะล่าสุด)
     row = session.execute(
         select(UPSStatus).where(UPSStatus.ups_id == ups_id).order_by(UPSStatus.timestamp.desc())
     ).scalars().first()
@@ -169,7 +162,5 @@ def aggregate_to_history(session: Session, ups_id: int):
         session.commit()
 
 def log_events_for_snapshot(session: Session, snap: Dict[str, Any]):
-    """Simplified event logging - events functionality disabled for now"""
-    # TODO: Implement event logging when UPSEvent model is added to main schema
     device_ip = snap.get("ip", "unknown")
     print(f"Events logging for device {device_ip} - functionality disabled")
