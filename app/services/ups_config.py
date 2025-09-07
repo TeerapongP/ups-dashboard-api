@@ -160,7 +160,133 @@ UPS_DEVICES: Dict[str, Dict[str, Any]] = {
         "location": "ห้องสมุด",
         "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
     },
+    "10.50.11.21": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 2",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.23": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 3",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.25": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 4",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.27": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 5",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.29": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 6",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.31": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 7",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.33": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 8",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.35": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 9 main",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.37": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 9 ชั้น 1",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.39": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 9 ชั้น 2",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.41": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 9 ชั้น 3",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.43": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 10 main",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.45": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 10 ชั้น 1",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.47": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 10 ชั้น 2",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.49": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 10 ชั้น 3",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.51": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 11 main",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.53": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 11 ชั้น 1",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.55": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 11 ชั้น 2",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.57": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "แฟลตบุคลากร 11 ชั้น 3",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.62": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "คณะสัตวแพทย์",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
     "10.50.11.64": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "คณะสัตวแพทย์",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.66": {
         "brand": SMART_POWER_BRAND,
         "model": "HE-1K-IoT",
         "location": "คณะสัตวแพทย์",
@@ -170,6 +296,18 @@ UPS_DEVICES: Dict[str, Dict[str, Any]] = {
         "brand": SMART_POWER_BRAND,
         "model": "HE-1K-IoT",
         "location": "หอพัก 25 ชั้น 1",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.69": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 25 ชั้น 2",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.71": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 25 ชั้น 3",
         "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
     },
     "10.50.11.73": {
@@ -238,10 +376,112 @@ UPS_DEVICES: Dict[str, Dict[str, Any]] = {
         "location": "หอพัก 28 ชั้น 2",
         "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
     },
+    "10.50.11.95": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 28 ชั้น 3",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.97": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 28 ชั้น 4",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.99": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 29 ชั้น 1",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.101": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 29 ชั้น 2",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.103": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 29 ชั้น 3",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.105": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 29 ชั้น 4",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.107": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 30 ชั้น 1",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.109": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 30 ชั้น 2",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
     "10.50.11.111": {
         "brand": SMART_POWER_BRAND,
         "model": "HE-1K-IoT",
         "location": "หอพัก 30 ชั้น 3",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.113": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 30 ชั้น 4",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.115": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 31 ชั้น 1",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.117": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 31 ชั้น 2",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.119": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 31 ชั้น 3",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.121": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 31 ชั้น 4",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.123": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 17",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.11.125": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "หอพัก 18",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.13.1": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "ศึกษาศาสตร์",
+        "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
+    },
+    "10.50.13.3": {
+        "brand": SMART_POWER_BRAND,
+        "model": "HE-1K-IoT",
+        "location": "วิศวะ",
         "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
     },
     "10.50.13.8": {
@@ -249,7 +489,7 @@ UPS_DEVICES: Dict[str, Dict[str, Any]] = {
         "model": "HE-1K-IoT",
         "location": "",
         "oids": {**STANDARD_OIDS, **EPPC_935_OIDS}
-    },
+    }
 }
 
 DEFAULT_CONFIG = {
