@@ -84,48 +84,34 @@ def read_one(
 def read_all(
     timeout: float = Query(1.0, ge=0.2, le=10.0),
     retries: int = Query(0, ge=0, le=5),
-    workers: int = Query(12, ge=1, le=64),
     ttl: float = Query(2.0, ge=0.0, le=60.0),
+    per_host_timeout: float | None = Query(None, ge=0.5, le=30.0, description="timeout ต่อเครื่อง (ถ้าไม่ระบุจะคำนวณอัตโนมัติ)"),
     persist: bool = Query(True),
     db: Session = Depends(get_db),
 ):
     """
-    ดึงข้อมูลทุกเครื่องแบบขนาน (ThreadPool) และเลือก persist ลงฐานข้อมูลได้
+    ดึงข้อมูลทุกเครื่องแบบขนานผ่าน ups_service.get_all_ups_data()
+    - จะข้าม persist รายการที่ status='error'
     """
-    items: List[Dict[str, Any]] = []
-
-    # เตรียมรายการ IP จากฐานข้อมูลผ่าน ups_service
-    dev_list = ups_service.get_device_list()
-    if not dev_list:
-        return {"count": 0, "items": []}
-
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = [
-            ex.submit(
-                ups_service.get_ups_data,
-                ip=d["ip"],
-                timeout=timeout,
-                retries=retries,
-                use_cache=True,
-                cache_ttl=ttl if ttl > 0 else None,
-            )
-            for d in dev_list
-        ]
-
-        for f in as_completed(futs):
-            try:
-                items.append(f.result())
-            except Exception as e:
-                items.append({"status": "Error", "error": str(e)})
+    # ดึงผลลัพธ์ทั้งหมดแบบขนาน (มีจัดเรียงตาม IP ให้แล้ว)
+    items: List[Dict[str, Any]] = ups_service.get_all_ups_data(
+        timeout=timeout,
+        retries=retries,
+        use_cache=True,
+        cache_ttl=ttl if ttl > 0 else None,
+        per_host_timeout=per_host_timeout,
+    )
 
     if persist:
         for snap in items:
+            # ข้ามถ้า error
+            if str(snap.get("status", "")).lower() == "error":
+                continue
             try:
                 ups_id = _ensure_device(db, snap)
                 persist_status(db, ups_id, snap)
                 log_events_for_snapshot(db, snap)
             except Exception as e:
-                # เก็บ error ต่อเครื่อง แต่ไม่ให้ทั้ง batch ล้ม
                 print(f"[persist/log] error for {snap.get('id') or snap.get('ip')}: {e}")
                 db.rollback()
                 continue

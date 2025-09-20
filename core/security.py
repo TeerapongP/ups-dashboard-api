@@ -2,12 +2,16 @@ from passlib.context import CryptContext
 from datetime import datetime, timedelta, timezone
 import jwt
 from app.core.config import settings
+from fastapi import Depends, HTTPException, status,Cookie
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from typing import Optional
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = settings.ALGORITHM
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.ACCESS_TOKEN_EXPIRE_MINUTES
+_bearer = HTTPBearer(auto_error=False)  
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -30,3 +34,19 @@ def verify_token(token: str) -> str | None:
         return username
     except jwt.PyJWTError:
         return None
+
+security = HTTPBearer(auto_error=True)
+
+
+def require_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    access_token: Optional[str] = Cookie(None),
+) -> str:
+    token = credentials.credentials if credentials else access_token
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    username = verify_token(token)
+    if not username:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    return username

@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 
 from sqlalchemy.orm import Session
 from sqlalchemy import select, and_
+from datetime import date as _date, datetime as _dt
 
 from model.model import (
     UPSEvent,
@@ -24,6 +25,7 @@ def _to_float(v: Any) -> Optional[float]:
         return float(v)
     except Exception:
         return None
+
 
 def _parse_collected_at(snap: Dict[str, Any]) -> datetime:
     """
@@ -54,6 +56,7 @@ def _parse_collected_at(snap: Dict[str, Any]) -> datetime:
             except Exception:
                 continue
     return datetime.utcnow()
+
 
 def _derive_device_id(ip: str) -> str:
     return f"UPS_{ip.replace('.', '_')}"
@@ -121,11 +124,17 @@ class UPSEventService:
             .first()
         )
 
+        # สถานะเหมือนเดิม → ไม่ต้องสร้าง event ใหม่
+        if last and last.new_status == new_status:
+            return last
+
+        # ปิด event เก่า (ถ้ามีและยังไม่ปิด)
         if last and last.next_changed_at is None:
             last.next_changed_at = ts
             last.duration_sec = int((ts - last.changed_at).total_seconds())
             session.flush()
 
+        # เปิด event ใหม่
         row = UPSStatusEvent(
             ups_id=ups_id,
             old_status=last.new_status if last else None,
@@ -138,9 +147,13 @@ class UPSEventService:
 
     # -------- Reports: daily counters --------
     @staticmethod
-    def _overlap_minutes(start: datetime, end: Optional[datetime],
-                         day_start: datetime, day_end: datetime,
-                         now: Optional[datetime] = None) -> int:
+    def _overlap_minutes(
+        start: datetime,
+        end: Optional[datetime],
+        day_start: datetime,
+        day_end: datetime,
+        now: Optional[datetime] = None,
+    ) -> int:
         if end is None:
             end = min(now or datetime.utcnow(), day_end)
         if end <= start:
@@ -164,7 +177,7 @@ class UPSEventService:
         รวมรายวัน (นาที):
           - offline_minutes: จาก ups_status_event.new_status = 'offline'
           - powerfail_minutes:
-              - ถ้า use_status_event_powerfail=True และ schema คุณรองรับ 'powerfail' ใน UPSStatusEvent → จะอ่านจาก ups_status_event
+              - ถ้า use_status_event_powerfail=True และ schema รองรับ 'powerfail' ใน UPSStatusEvent → อ่านจาก ups_status_event
               - ถ้า False (ดีฟอลต์) → อ่านจาก ups_events.event_type='powerfail'
         """
         day_start = day.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -181,7 +194,7 @@ class UPSEventService:
                 .where(
                     and_(
                         UPSStatusEvent.ups_id == ups_id,
-                        UPSStatusEvent.new_status == 'offline',
+                        UPSStatusEvent.new_status == "offline",
                         UPSStatusEvent.changed_at < day_end,
                     )
                 )
@@ -199,7 +212,7 @@ class UPSEventService:
                     .where(
                         and_(
                             UPSStatusEvent.ups_id == ups_id,
-                            UPSStatusEvent.new_status == 'powerfail',
+                            UPSStatusEvent.new_status == "powerfail",
                             UPSStatusEvent.changed_at < day_end,
                         )
                     )
@@ -216,7 +229,7 @@ class UPSEventService:
                     .where(
                         and_(
                             UPSEvent.ups_id == ups_id,
-                            UPSEvent.event_type == 'powerfail',
+                            UPSEvent.event_type == "powerfail",
                             UPSEvent.start_time < day_end,
                         )
                     )
@@ -243,7 +256,7 @@ class UPSEventService:
         """
         เขียนผลรวมรายวันลง ups_history ณ date_hour = 00:00 ของวันนั้น
         - offline_minutes -> offline_minutes
-        - powerfail_minutes -> warning_minutes (ถ้าต้องการคอลัมน์แยก บอกผมเพื่อเพิ่ม schema)
+        - powerfail_minutes -> warning_minutes (ถ้าต้องการคอลัมน์แยก บอกเพื่อเพิ่ม schema)
         """
         counters = self.get_daily_counters(
             session, day, ups_id, use_status_event_powerfail=use_status_event_powerfail
@@ -255,7 +268,9 @@ class UPSEventService:
                 select(UPSHistory).where(
                     and_(UPSHistory.ups_id == ups_id, UPSHistory.date_hour == day_start)
                 )
-            ).scalars().first()
+            )
+            .scalars()
+            .first()
         )
 
         if hist:
@@ -292,9 +307,9 @@ def _ensure_device(session: Session, snap: Dict[str, Any]) -> str:
     ip_address = snap.get("ip", "0.0.0.0")
 
     dev = (
-        session.execute(
-            select(UPSDevice).where(UPSDevice.ip_address == ip_address)
-        ).scalars().first()
+        session.execute(select(UPSDevice).where(UPSDevice.ip_address == ip_address))
+        .scalars()
+        .first()
     )
 
     if not dev:
@@ -321,7 +336,7 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
     - ใช้ collected_at เป็น timestamp (fallback = utcnow)
     - map 'powerfail' -> 'warning' สำหรับ UPSStatus.status (เพราะ enum ไม่มี powerfail)
     - log status change ใน ups_status_event (ใช้สถานะที่ map แล้ว)
-    - ถ้า status เดิมเป็น powerfail (จาก snap) จะ log ups_events(event_type='powerfail') ด้วย
+    - จัดการช่วง UPSEvent สำหรับ powerfail/offline: เปิดเมื่อเข้า/ปิดเมื่อออก
     """
     ts = _parse_collected_at(snap)
 
@@ -343,7 +358,9 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
         status=status_for_snapshot,
         battery_percentage=_to_float(snap.get("batteryPercent")),
         battery_voltage=_to_float(snap.get("batteryVDC")),
-        backup_time_minutes=int(_to_float(snap.get("backupTimeMin")) or 0) if snap.get("backupTimeMin") is not None else None,
+        backup_time_minutes=int(_to_float(snap.get("backupTimeMin")) or 0)
+        if snap.get("backupTimeMin") is not None
+        else None,
         temperature=_to_float(snap.get("temperatureC")),
         input_voltage_l1=_to_float(input_.get("L1V")),
         input_voltage_l2=_to_float(input_.get("L2V")),
@@ -368,18 +385,101 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
     session.add(row)
     session.flush()
 
-    # ถ้า snap บอก powerfail ให้ log เป็น event เฉพาะด้วย (ไว้คำนวณรายวัน)
+    # ----- จัดการช่วง powerfail (UPSEvent) ให้ครบ เปิด/ปิดอัตโนมัติ -----
     if st_raw == "powerfail":
-        ups_event_service.log_event(
-            session,
-            ups_id=ups_id,
-            event_type="powerfail",
-            severity="warning",
-            message="Power failure detected",
-            start_time=ts,
+        open_pf = (
+            session.execute(
+                select(UPSEvent)
+                .where(
+                    and_(
+                        UPSEvent.ups_id == ups_id,
+                        UPSEvent.event_type == "powerfail",
+                        UPSEvent.end_time.is_(None),
+                    )
+                )
+                .order_by(UPSEvent.start_time.desc())
+            )
+            .scalars()
+            .first()
         )
+        if not open_pf:
+            ups_event_service.log_event(
+                session,
+                ups_id=ups_id,
+                event_type="powerfail",
+                severity="warning",
+                message="Power failure detected",
+                start_time=ts,
+            )
+    else:
+        # ปิดช่วง powerfail ถ้ามีเปิดค้างอยู่และตอนนี้ไม่ใช่ powerfail แล้ว
+        open_pf = (
+            session.execute(
+                select(UPSEvent)
+                .where(
+                    and_(
+                        UPSEvent.ups_id == ups_id,
+                        UPSEvent.event_type == "powerfail",
+                        UPSEvent.end_time.is_(None),
+                    )
+                )
+                .order_by(UPSEvent.start_time.desc())
+            )
+            .scalars()
+            .first()
+        )
+        if open_pf:
+            open_pf.end_time = ts
+            session.flush()
 
-    # log status change (ใช้สถานะที่รองรับใน enum)
+    # ----- จัดการช่วง offline (UPSEvent) ให้ครบ เปิด/ปิดอัตโนมัติ -----
+    if st_raw == "offline":
+        open_off = (
+            session.execute(
+                select(UPSEvent)
+                .where(
+                    and_(
+                        UPSEvent.ups_id == ups_id,
+                        UPSEvent.event_type == "offline",
+                        UPSEvent.end_time.is_(None),
+                    )
+                )
+                .order_by(UPSEvent.start_time.desc())
+            )
+            .scalars()
+            .first()
+        )
+        if not open_off:
+            ups_event_service.log_event(
+                session,
+                ups_id=ups_id,
+                event_type="offline",
+                severity="critical",
+                message="Device is offline",
+                start_time=ts,
+            )
+    else:
+        # ปิดช่วง offline ถ้ามีเปิดค้างอยู่และตอนนี้ไม่ใช่ offline แล้ว
+        open_off = (
+            session.execute(
+                select(UPSEvent)
+                .where(
+                    and_(
+                        UPSEvent.ups_id == ups_id,
+                        UPSEvent.event_type == "offline",
+                        UPSEvent.end_time.is_(None),
+                    )
+                )
+                .order_by(UPSEvent.start_time.desc())
+            )
+            .scalars()
+            .first()
+        )
+        if open_off:
+            open_off.end_time = ts
+            session.flush()
+
+    # บันทึกไทม์ไลน์สถานะ (ใช้สถานะที่รองรับใน enum)
     ups_event_service.log_status_change(session, ups_id, status_for_snapshot, ts)
     session.flush()
     return row
@@ -390,9 +490,65 @@ def log_events_for_snapshot(session: Session, snap: Dict[str, Any]) -> None:
     hook สำหรับ log เพิ่มเติมจาก snapshot (กรณีต้องการ)
     ตอนนี้ยังเป็น stub เอาไว้ต่อยอดเช่น battery_low, temp_high เป็นต้น
     """
-    ip = snap.get("ip", "unknown")
-    _ = ip  # silence lint
     # ตัวอย่างต่อยอด:
     # if (_to_float(snap.get("batteryPercent")) or 100) < 15:
-    #     ups_event_service.log_event(session, ups_id, "battery_low", "warning", start_time=_parse_collected_at(snap))
+    #     ups_event_service.log_event(session, ups_id, "battery_low", "warning",
+    #                                 start_time=_parse_collected_at(snap))
     return
+
+
+def aggregate_to_history(
+    session: Session,
+    day,  # str | datetime | date
+    ups_id: str,
+    *,
+    use_status_event_powerfail: bool = False,
+    commit: bool = True,
+) -> UPSHistory:
+    """
+    Wrapper ให้ชื่อฟังก์ชันตรงกับที่ที่อื่น import ใช้
+    - day รองรับ 'YYYY-MM-DD' | datetime | date
+    - เรียกใช้ ups_event_service.persist_daily_to_history ใต้ฝา
+    """
+    # normalize day -> datetime (naive) ที่เวลา 00:00
+    if isinstance(day, str):
+        s = day.strip().replace("Z", "")
+        parsed = None
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+            try:
+                parsed = _dt.strptime(s, fmt)
+                break
+            except Exception:
+                continue
+        if parsed is None:
+            try:
+                parsed = _dt.fromisoformat(s)
+            except Exception:
+                raise ValueError(f"aggregate_to_history(day): unsupported date string '{day}'")
+        day_dt = parsed
+    elif isinstance(day, _dt):
+        day_dt = day
+    elif isinstance(day, _date):
+        day_dt = _dt.combine(day, _dt.min.time())
+    else:
+        raise TypeError("aggregate_to_history(day): day must be str|datetime|date")
+
+    # ตัดเวลาให้เป็นต้นวัน
+    day_dt = day_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    return ups_event_service.persist_daily_to_history(
+        session,
+        day_dt,
+        ups_id,
+        use_status_event_powerfail=use_status_event_powerfail,
+        commit=commit,
+    )
+
+
+__all__ = [
+    "UPSEventService",
+    "ups_event_service",
+    "persist_status",
+    "log_events_for_snapshot",
+    "aggregate_to_history",
+]
