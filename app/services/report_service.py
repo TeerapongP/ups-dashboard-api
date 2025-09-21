@@ -1,49 +1,71 @@
+# app/services/report_service.py
+
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, time
-from typing import Union, Any, Dict, Optional
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-from decimal import Decimal
 import json
+from datetime import datetime, date as _date, time as _time, timedelta
+from typing import Any, Dict, List, Optional, Union
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 
-def _to_jsonable(v: Any):
-    if isinstance(v, Decimal):
-        return float(v)
+def _ensure_date(day: Union[str, _date]) -> _date:
+    """รับ 'YYYY-MM-DD' หรือ date แล้วคืนเป็น date"""
+    if isinstance(day, _date):
+        return day
+    if isinstance(day, str):
+        s = day.strip().replace("Z", "")
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except Exception:
+                continue
+        # ลอง ISO อิสระ
+        try:
+            return datetime.fromisoformat(s).date()
+        except Exception:
+            pass
+    raise ValueError(f"_ensure_date: unsupported day={day!r}")
+
+
+def _sid(v: Any) -> Optional[str]:
+    """ทำให้ ups_id เป็นสตริงเสมอ (หรือ None ถ้าไม่มี)"""
+    return str(v) if v is not None else None
+
+
+def _to_jsonable(v: Any) -> Any:
+    """แปลงค่าให้ serialize เป็น JSON ได้ง่าย"""
     if isinstance(v, datetime):
-        return v.isoformat()
+        # ให้ละเอียดถึงวินาทีพอ (หากอยากรวม microseconds: .isoformat())
+        return v.replace(microsecond=0).isoformat()
+    try:
+        # แปลง Decimal → float (ถ้ามี)
+        from decimal import Decimal
+        if isinstance(v, Decimal):
+            return float(v)
+    except Exception:
+        pass
     return v
-
-
-def _sid(v: Any) -> str:
-    return "" if v is None else str(v)
 
 
 class ReportService:
     @staticmethod
-    def _ensure_date(day: Union[str, date]) -> date:
-        if isinstance(day, date):
-            return day
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
-            try:
-                return datetime.strptime(day, fmt).date()
-            except ValueError:
-                continue
-        raise ValueError("Invalid date format, expected YYYY-MM-DD or DD/MM/YYYY")
+    def _ensure_date(day: Union[str, _date]) -> _date:
+        return _ensure_date(day)
 
     @staticmethod
     def get_daily_report(
         db: Session,
-        day: Union[str, date],
+        day: Union[str, _date],
         *,
         ups_id: Optional[str] = None,
         only_with_events: bool = True,
     ):
-        d: date = ReportService._ensure_date(day)
+        d: _date = ReportService._ensure_date(day)
 
-        start_dt = datetime.combine(d, time.min)
-        end_dt   = start_dt + timedelta(days=1)
+        start_dt = datetime.combine(d, _time.min)     # ต้นวัน (00:00:00)
+        end_dt   = start_dt + timedelta(days=1)       # ต้นวันถัดไป
 
         # ---------- Devices (active) ----------
         dev_sql = """
@@ -51,35 +73,51 @@ class ReportService:
             FROM ups_devices
             WHERE is_active = 1
         """
-        params = {}
+        params: Dict[str, Any] = {}
         if ups_id:
             dev_sql += " AND id = :uid"
             params["uid"] = ups_id
         dev_sql += " ORDER BY id"
         devs = db.execute(text(dev_sql), params).mappings().all()
 
-        # ---------- Offline windows ----------
+        # ---------- Offline windows (overlap-aware + ongoing) ----------
+        # อิงช่วงรายงาน [start_dt, end_dt)
+        # ถ้าเหตุการณ์ยังเปิด (next_changed_at IS NULL) ให้คำนวณถึงเวลาปัจจุบัน แต่ไม่เกิน end_dt
+        report_now = min(datetime.now(), end_dt)
+
         off_sql = """
-            SELECT ups_id, changed_at, next_changed_at, duration_sec, note
+            SELECT
+                ups_id,
+                GREATEST(changed_at, :s) AS win_start,
+                LEAST(COALESCE(next_changed_at, :now), :e) AS win_end,
+                TIMESTAMPDIFF(
+                    SECOND,
+                    GREATEST(changed_at, :s),
+                    LEAST(COALESCE(next_changed_at, :now), :e)
+                ) AS duration_sec,
+                note
             FROM ups_status_event
             WHERE new_status = 'offline'
-              AND changed_at >= :s AND changed_at < :e
+              AND changed_at < :e
+              AND COALESCE(next_changed_at, :now) > :s
         """
-        off_params = {"s": start_dt, "e": end_dt}
+        off_params: Dict[str, Any] = {"s": start_dt, "e": end_dt, "now": report_now}
         if ups_id:
             off_sql += " AND ups_id = :uid"
             off_params["uid"] = ups_id
-        off_sql += " ORDER BY ups_id, changed_at"
+        off_sql += " ORDER BY ups_id, win_start"
         offline = db.execute(text(off_sql), off_params).mappings().all()
 
         # ---------- PowerFail events ----------
+        # (ยังคงดึงเฉพาะที่เริ่มภายในวัน; ถ้าต้องการ overlap-aware เหมือน offline
+        #  สามารถปรับใช้ GREATEST/LEAST เช่นเดียวกันได้)
         pf_sql = """
             SELECT ups_id, start_time, end_time, duration_seconds, message, event_data
             FROM ups_events
             WHERE event_type = 'powerfail'
               AND start_time >= :s AND start_time < :e
         """
-        pf_params = {"s": start_dt, "e": end_dt}
+        pf_params: Dict[str, Any] = {"s": start_dt, "e": end_dt}
         if ups_id:
             pf_sql += " AND ups_id = :uid"
             pf_params["uid"] = ups_id
@@ -87,7 +125,6 @@ class ReportService:
         powerfail = db.execute(text(pf_sql), pf_params).mappings().all()
 
         # ---------- Latest status per device (ก่อนสิ้นวัน) ----------
-        # ดึง new_status ล่าสุดของแต่ละ ups_id ที่ changed_at < end_dt
         last_stat_sql = """
             SELECT e.ups_id, e.new_status, e.changed_at
             FROM ups_status_event e
@@ -102,12 +139,15 @@ class ReportService:
         """
         ups_filter_inner = "AND ups_id = :uid" if ups_id else ""
         ups_filter_outer = "WHERE e.ups_id = :uid" if ups_id else ""
-        last_params = {"e": end_dt}
+        last_params: Dict[str, Any] = {"e": end_dt}
         if ups_id:
             last_params["uid"] = ups_id
 
         last_status_rows = db.execute(
-            text(last_stat_sql.format(ups_filter_inner=ups_filter_inner, ups_filter_outer=ups_filter_outer)),
+            text(last_stat_sql.format(
+                ups_filter_inner=ups_filter_inner,
+                ups_filter_outer=ups_filter_outer
+            )),
             last_params
         ).mappings().all()
 
@@ -147,7 +187,7 @@ class ReportService:
                 by_id[sid]["meta"].setdefault("lastStatusAt", None)
             return by_id[sid]
 
-        # จากตาราง devices (active)
+        # devices meta
         for row in devs:
             sid = _sid(row["id"])
             b = ensure_bucket(sid)
@@ -160,13 +200,16 @@ class ReportService:
                 "capacityW": _to_jsonable(row.get("capacity_w")),
             })
 
-        # offline
+        # offline (ใช้ช่วง win_start/win_end และ duration_sec ที่คิด overlap มาแล้ว)
         for r in offline:
+            dur = int(r.get("duration_sec") or 0)
+            if dur < 0:  # กันเคส timezone เพี้ยน
+                dur = 0
             b = ensure_bucket(r["ups_id"])
             b["offline"].append({
-                "start": _to_jsonable(r.get("changed_at")),
-                "end": _to_jsonable(r.get("next_changed_at")),
-                "durationSec": int(r.get("duration_sec") or 0),
+                "start": _to_jsonable(r.get("win_start")),
+                "end": _to_jsonable(r.get("win_end")),
+                "durationSec": dur,
                 "note": r.get("note"),
             })
 
@@ -189,15 +232,15 @@ class ReportService:
                 "threshold": _to_jsonable(evd.get("threshold")),
             })
 
-        # ใส่สถานะล่าสุดลง meta
+        # meta: last status
         for sid, info in last_status_by_id.items():
             b = ensure_bucket(sid)
             b["meta"]["lastStatus"] = info.get("status")
             b["meta"]["lastStatusAt"] = info.get("at")
 
-        devices = list(by_id.values())
+        devices: List[dict] = list(by_id.values())
 
-        # --- ตัดพวกที่ว่างออก ถ้า only_with_events=True ---
+        # --- filter เฉพาะที่มีเหตุการณ์ (ถ้าต้องการ) ---
         if only_with_events:
             devices = [
                 drow for drow in devices
@@ -210,11 +253,8 @@ class ReportService:
                 drow["offline"] = []
             if not isinstance(drow.get("powerFail"), list):
                 drow["powerFail"] = []
-            # (ออปชัน) ถ้าอยากตั้งค่าเริ่มต้นเมื่อไม่พบเหตุการณ์เลย:
-            # if drow["meta"]["lastStatus"] is None:
-            #     drow["meta"]["lastStatus"] = "online"
 
-        devices.sort(key=lambda x: (x["meta"]["upsId"] or ""))
+        devices.sort(key=lambda x: (x["meta"]["upsId"]))
 
         return {
             "reportDate": d.isoformat(),

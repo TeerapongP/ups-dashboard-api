@@ -37,7 +37,8 @@ def _parse_collected_at(snap: Dict[str, Any]) -> datetime:
         return datetime.utcnow()
     if isinstance(v, (int, float)):
         try:
-            return datetime.fromtimestamp(float(v))
+            # ใช้ utcfromtimestamp แทน fromtimestamp
+            return datetime.utcfromtimestamp(float(v))
         except Exception:
             return datetime.utcnow()
     if isinstance(v, str):
@@ -56,7 +57,6 @@ def _parse_collected_at(snap: Dict[str, Any]) -> datetime:
             except Exception:
                 continue
     return datetime.utcnow()
-
 
 def _derive_device_id(ip: str) -> str:
     return f"UPS_{ip.replace('.', '_')}"
@@ -340,17 +340,22 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
     """
     ts = _parse_collected_at(snap)
 
-    st_raw = (snap.get("status") or "").strip().lower()
+    st_raw = (snap.get("status") ).strip().lower()
     if st_raw in ("online", "offline", "warning", "critical"):
         status_for_snapshot = st_raw
     elif st_raw == "powerfail":
-        status_for_snapshot = "warning"  # เก็บเป็น warning ใน UPSStatus
+        status_for_snapshot = "warning"
     else:
-        # auto rule แบบง่าย ๆ
         status_for_snapshot = "online"
 
     input_ = snap.get("input") or {}
     output = snap.get("output") or {}
+
+    # --- แปลงความถี่จากเดซิ-เฮิร์ตซ์เป็นเฮิร์ตซ์ (หาร 10) ---
+    in_freq_raw = _to_float(input_.get("freqHz"))
+    out_freq_raw = _to_float(output.get("freqHz"))
+    in_freq_hz  = _norm_freq_hz(input_.get("freqHz"))
+    out_freq_hz = _norm_freq_hz(output.get("freqHz"))
 
     row = UPSStatus(
         ups_id=ups_id,
@@ -368,7 +373,7 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
         input_current_l1=_to_float(input_.get("L1A")),
         input_current_l2=_to_float(input_.get("L2A")),
         input_current_l3=_to_float(input_.get("L3A")),
-        input_frequency=_to_float(input_.get("freqHz")),
+        input_frequency=in_freq_hz,      # << เปลี่ยนมาใช้ค่าแปลงแล้ว
         input_max_voltage=_to_float(input_.get("maxV")),
         input_min_voltage=_to_float(input_.get("minV")),
         output_voltage_l1=_to_float(output.get("L1V")),
@@ -377,7 +382,7 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
         output_current_l1=_to_float(output.get("L1A")),
         output_current_l2=_to_float(output.get("L2A")),
         output_current_l3=_to_float(output.get("L3A")),
-        output_frequency=_to_float(output.get("freqHz")),
+        output_frequency=out_freq_hz,    # << เปลี่ยนมาใช้ค่าแปลงแล้ว
         output_load_va=int(_to_float(snap.get("loadVA")) or 0) if snap.get("loadVA") is not None else None,
         output_load_w=int(_to_float(snap.get("loadW")) or 0) if snap.get("loadW") is not None else None,
         load_percentage=_to_float(snap.get("loadPct")),
@@ -385,7 +390,7 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
     session.add(row)
     session.flush()
 
-    # ----- จัดการช่วง powerfail (UPSEvent) ให้ครบ เปิด/ปิดอัตโนมัติ -----
+    # ----- ช่วง powerfail -----
     if st_raw == "powerfail":
         open_pf = (
             session.execute(
@@ -412,7 +417,6 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
                 start_time=ts,
             )
     else:
-        # ปิดช่วง powerfail ถ้ามีเปิดค้างอยู่และตอนนี้ไม่ใช่ powerfail แล้ว
         open_pf = (
             session.execute(
                 select(UPSEvent)
@@ -432,7 +436,7 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
             open_pf.end_time = ts
             session.flush()
 
-    # ----- จัดการช่วง offline (UPSEvent) ให้ครบ เปิด/ปิดอัตโนมัติ -----
+    # ----- ช่วง offline -----
     if st_raw == "offline":
         open_off = (
             session.execute(
@@ -459,7 +463,6 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
                 start_time=ts,
             )
     else:
-        # ปิดช่วง offline ถ้ามีเปิดค้างอยู่และตอนนี้ไม่ใช่ offline แล้ว
         open_off = (
             session.execute(
                 select(UPSEvent)
@@ -479,7 +482,7 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
             open_off.end_time = ts
             session.flush()
 
-    # บันทึกไทม์ไลน์สถานะ (ใช้สถานะที่รองรับใน enum)
+    # timeline ของสถานะ (ใช้ค่าที่ map แล้ว)
     ups_event_service.log_status_change(session, ups_id, status_for_snapshot, ts)
     session.flush()
     return row
@@ -543,6 +546,55 @@ def aggregate_to_history(
         use_status_event_powerfail=use_status_event_powerfail,
         commit=commit,
     )
+
+def _eval_number_string(s: str) -> Optional[float]:
+    """
+    รองรับสตริงตัวเลขง่าย ๆ ที่มีเครื่องหมายคำนวณ เช่น '500/10', '50.1'
+    ป้องกันด้วย whitelist ของอักขระที่ยอมรับ
+    """
+    s = s.strip()
+    if not _ARITH_SAFE.match(s):
+        return None
+    try:
+        # ใช้ eval แบบ context ว่าง ๆ (ไม่มี builtins) เพื่อความปลอดภัย
+        return float(eval(s, {"__builtins__": {}}, {}))
+    except Exception:
+        return None
+
+def _to_number(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str) and v.strip() != "":
+        # ลอง parse เป็นเลขตรง ๆ ก่อน
+        try:
+            return float(v.strip())
+        except Exception:
+            # ถ้าไม่ใช่เลขล้วน อาจเป็นนิพจน์ง่าย ๆ เช่น '500/10'
+            return _eval_number_string(v)
+    return None
+
+def _norm_freq_hz(v: Any) -> Optional[float]:
+    """
+    แปลงความถี่ให้เป็นเฮิร์ตซ์ (Hz) เสมอ:
+    - ถ้าได้ deci-Hz (ค่าประมาณ >= 100) ให้หาร 10
+    - ถ้าได้ Hz อยู่แล้ว (ประมาณ 40–70) ให้คืนตามเดิม
+    - รองรับสตริงแบบ '500/10'
+    - 0 หรือค่าติดลบ -> None
+    """
+    x = _to_number(v)
+    if x is None:
+        return None
+    if x <= 0:
+        return None
+    # heuristic: ถ้าค่า >= 100 ให้ถือว่าเป็น deci-Hz
+    hz = x / 10.0 if x >= 100 else x
+    # กันค่าเพี้ยนมาก ๆ
+    if hz > 1000:  # ไม่สมเหตุสมผลสำหรับ line frequency
+        return None
+    # ปัดทศนิยมเบา ๆ
+    return round(hz, 2)
 
 
 __all__ = [

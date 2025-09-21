@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, Future, TimeoutError as Futur
 import time
 import random
 import os
+import re
 
 from app.services.snmp_client import snmp_client
 from app.api.routes.data_utils import OIDResolver, DataProcessor
@@ -46,6 +47,59 @@ def _human_status(payload: Dict[str, Any]) -> str:
     except Exception:
         # ถ้าคำนวณไม่ได้ ให้ถือว่า Online เพื่อไม่เตะระบบ
         return "Online"
+
+def _blank_identity_fields(rec: Dict[str, Any]) -> None:
+    """บังคับให้ brand/model/location เป็น string ว่าง"""
+    rec["brand"] = ""
+    rec["model"] = ""
+    rec["location"] = ""
+
+
+# ---------- frequency normalizer (Hz) ----------
+_ARITH_SAFE = re.compile(r"^[\d\.\s\+\-\*\/\(\)]+$")
+
+def _eval_number_string(s: str) -> Optional[float]:
+    """
+    รองรับสตริงตัวเลขง่าย ๆ ที่มีเครื่องหมายคำนวณ เช่น '500/10', '50.1'
+    ป้องกันด้วย whitelist ของอักขระที่ยอมรับ
+    """
+    s = s.strip()
+    if not _ARITH_SAFE.match(s):
+        return None
+    try:
+        return float(eval(s, {"__builtins__": {}}, {}))
+    except Exception:
+        return None
+
+def _to_number(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str) and v.strip() != "":
+        try:
+            return float(v.strip())
+        except Exception:
+            return _eval_number_string(v)
+    return None
+
+def _norm_freq_hz(v: Any) -> Optional[float]:
+    """
+    แปลงความถี่ให้เป็นเฮิร์ตซ์ (Hz) เสมอ:
+    - ถ้าได้ deci-Hz (ค่าประมาณ >= 100) ให้หาร 10
+    - ถ้าได้ Hz อยู่แล้ว (ช่วง ~45–65) คืนตามเดิม
+    - รองรับสตริงแบบ '500/10'
+    - 0 หรือติดลบ -> None
+    """
+    x = _to_number(v)
+    if x is None:
+        return None
+    if x <= 0:
+        return None
+    hz = x / 10.0 if x >= 100 else x
+    if hz > 1000:  # กันค่าผิดปกติ
+        return None
+    return round(hz, 2)
 
 
 class UPSService:
@@ -97,20 +151,24 @@ class UPSService:
         # 1) ตรวจอุปกรณ์จาก DB
         dev = self.repo.get_device_by_ip(ip)
         if not dev:
-            return {
+            resp = {
                 "id": _derive_id(ip),
                 "ip": ip,
                 "status": "error",
                 "error": f"No device found for ip={ip}",
             }
+            _blank_identity_fields(resp)
+            return resp
         ups_db_id: str = dev["id"]
         if not dev.get("is_active", 1):
-            return {
+            resp = {
                 "id": _derive_id(ip),
                 "ip": ip,
                 "status": "error",
                 "error": "Device is not active",
             }
+            _blank_identity_fields(resp)
+            return resp
 
         # 2) ตั้งค่าพื้นฐาน
         timeout = float(timeout if timeout is not None else self.defaults["timeout"])
@@ -128,12 +186,14 @@ class UPSService:
         # 4) สร้าง OID config จาก profile ของเครื่อง
         profile_id = self.repo.get_profile_id_for_ups(ups_db_id)
         if not profile_id:
-            return {
+            resp = {
                 "id": _derive_id(ip),
                 "ip": ip,
                 "status": "error",
                 "error": f"No SNMP profile mapped for ups_id={ups_db_id}",
             }
+            _blank_identity_fields(resp)
+            return resp
 
         primary_oids, fallbacks, scale_key_map = self.repo.get_oids_for_profile(profile_id)
         oid_config = self._build_oid_config(primary_oids, fallbacks)
@@ -157,17 +217,20 @@ class UPSService:
                 version=snmp_version,
             )
         except Exception as e:
-            return {
+            resp = {
                 "id": _derive_id(ip),
                 "ip": ip,
                 "status": "error",
                 "error": f"SNMP error: {e}",
             }
+            _blank_identity_fields(resp)
+            return resp
 
         # 6) ประมวลผลผลลัพธ์
         device_config = {
             "id": ups_db_id,               # รหัสใน DB (ไม่แสดงออก UI ถ้าไม่ต้องการ)
             "ip": ip,
+            # ค่าจาก DB อาจใช้ใน DataProcessor
             "brand": dev.get("brand"),
             "model": dev.get("model"),
             "location": dev.get("location"),
@@ -179,6 +242,16 @@ class UPSService:
 
         processor = DataProcessor(resolver)
         data = processor.process_ups_data(ip, oid_values, device_config)
+
+        # --- ปรับความถี่ให้เป็น Hz เสมอ (รองรับค่า deci-Hz และนิพจน์) ---
+        try:
+            if isinstance(data.get("input"), dict):
+                data["input"]["freqHz"] = _norm_freq_hz(data["input"].get("freqHz"))
+            if isinstance(data.get("output"), dict):
+                data["output"]["freqHz"] = _norm_freq_hz(data["output"].get("freqHz"))
+        except Exception:
+            # ไม่ให้กระทบข้อมูลอื่น ๆ ถ้า normalize พลาด
+            pass
 
         # สร้าง payload ตามฟอร์แมตตัวอย่าง
         data["id"] = _derive_id(ip)         # ให้เป็น UPS_<ip>
@@ -228,19 +301,23 @@ class UPSService:
             try:
                 out.append(fut.result(timeout=per_host_timeout))
             except FuturesTimeout:
-                out.append({
+                resp = {
                     "id": _derive_id(ip),
                     "ip": ip,
                     "status": "error",
                     "error": f"Future timeout (> {per_host_timeout:.2f}s)",
-                })
+                }
+                _blank_identity_fields(resp)
+                out.append(resp)
             except Exception as e:
-                out.append({
+                resp = {
                     "id": _derive_id(ip),
                     "ip": ip,
                     "status": "error",
                     "error": f"Future error: {e}",
-                })
+                }
+                _blank_identity_fields(resp)
+                out.append(resp)
 
         # เรียงตาม IP จริง
         out.sort(key=lambda r: _ip_key(r.get("ip", "")))

@@ -26,8 +26,8 @@ class UPSRepository:
         return pymysql.connect(
             host=parsed.hostname or "127.0.0.1",
             port=int(parsed.port or 3306),
-            user=unquote(parsed.username or ""),
-            password=unquote(parsed.password or ""),
+            user=unquote(parsed.username ),
+            password=unquote(parsed.password ),
             database=(parsed.path or "/").lstrip("/") or None,
             charset="utf8mb4",
             cursorclass=pymysql.cursors.DictCursor,
