@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
+from fastapi import APIRouter, Depends, HTTPException, status, Query , Path
 from sqlalchemy.orm import Session
 
 from db.database import SessionLocal
@@ -14,6 +14,8 @@ from datetime import datetime
 import ipaddress
 from typing import Optional
 from sqlalchemy.orm import Session, selectinload
+from app.utils.errors import sanitize_db_error
+import logging
 
 router = APIRouter(prefix="/snmp", tags=["SNMP / OID"])
 
@@ -50,7 +52,7 @@ def create_device_with_oids(payload: DeviceCreateWithOIDsPayload, db: Session = 
 # ---------- Update: UPS ----------
 @router.put("/devices/{ups_id}", status_code=status.HTTP_200_OK)
 def update_device(
-    ups_id: int = Path(..., ge=1),
+    ups_id: str = Path(..., min_length=1, pattern=r"^[A-Za-z0-9_]+$"),
     payload: DeviceUpdatePayload = ...,
     db: Session = Depends(get_db),
 ):
@@ -62,6 +64,8 @@ def update_device(
             model=payload.model,
             location=payload.location,
             is_active=payload.is_active,
+            data=payload.data,                 # <<<
+            profile_name=payload.profile_name, # <<<
         )
         db.commit()
         return result
@@ -71,7 +75,7 @@ def update_device(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"อัปเดตไม่สำเร็จ: {e}")
-
+    
 # ---------- Delete: UPS ----------
 @router.delete("/devices/{ups_id}", status_code=status.HTTP_200_OK)
 def delete_device(
@@ -92,14 +96,28 @@ def delete_device(
 
 
 # ---------- View: OIDs by IP (ใช้ในหน้าเดียว) ----------
-@router.get("/devices/by-ip/{ip}/oids", status_code=status.HTTP_200_OK)
-def get_oids_for_device_by_ip(ip: str, db: Session = Depends(get_db)):
+@router.get("/devices/{ip}/config", status_code=status.HTTP_200_OK)
+def get_device_config_for_ip(
+    ip: str = Path(..., description="IPv4 เช่น 10.40.1.10"),
+    base_profile: str = Query("STANDARD", description="โปรไฟล์ฐานที่จะ merge เช่น STANDARD"),
+    override_profile: Optional[str] = Query(
+        default=None,
+        description="บังคับใช้โปรไฟล์นี้ถ้าเครื่องยังไม่ผูก (เช่น EPPC_935)"),
+    db: Session = Depends(get_db),
+):
     try:
-        return snmp_service.get_oids_for_device_by_ip(db, ip)
+        cfg = snmp_service.get_single_device_config(
+            db, ip=ip, base_profile_name=base_profile, override_profile_name=override_profile
+        )
+        return {"ip": ip, **cfg}
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        http_status, safe = sanitize_db_error(e)
+        raise HTTPException(status_code=http_status, detail=safe)
 
-# (optional) รายการอุปกรณ์สั้น ๆ สำหรับ dropdown
+
+
 # ---------- helpers ----------
 def _ip_to_int(ip: str) -> int:
     try:
