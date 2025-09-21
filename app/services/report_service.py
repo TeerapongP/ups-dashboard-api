@@ -1,5 +1,4 @@
 # app/services/report_service.py
-
 from __future__ import annotations
 
 import json
@@ -9,40 +8,52 @@ from typing import Any, Dict, List, Optional, Union
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # py<3.9
+    from backports.zoneinfo import ZoneInfo  # type: ignore
 
-def _ensure_date(day: Union[str, _date]) -> _date:
-    """รับ 'YYYY-MM-DD' หรือ date แล้วคืนเป็น date"""
+BKK = ZoneInfo("Asia/Bangkok")
+
+
+def _ensure_date(day: Optional[Union[str, _date]]) -> _date:
+    """
+    รับ 'YYYY-MM-DD' | 'YYYY/MM/DD' | ISO string | date | None
+    คืนเป็น date (default = วันนี้ตามเวลา Asia/Bangkok)
+    """
+    if day is None:
+        return datetime.now(BKK).date()
     if isinstance(day, _date):
         return day
     if isinstance(day, str):
         s = day.strip().replace("Z", "")
+        if not s:
+            return datetime.now(BKK).date()
         for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
             try:
                 return datetime.strptime(s, fmt).date()
             except Exception:
                 continue
-        # ลอง ISO อิสระ
         try:
             return datetime.fromisoformat(s).date()
         except Exception:
-            pass
-    raise ValueError(f"_ensure_date: unsupported day={day!r}")
+            return datetime.now(BKK).date()
+    # fallback
+    return datetime.now(BKK).date()
 
 
 def _sid(v: Any) -> Optional[str]:
-    """ทำให้ ups_id เป็นสตริงเสมอ (หรือ None ถ้าไม่มี)"""
+    """บังคับให้ ups_id เป็นสตริงเสมอ (หรือ None ถ้าไม่มี)"""
     return str(v) if v is not None else None
 
 
 def _to_jsonable(v: Any) -> Any:
     """แปลงค่าให้ serialize เป็น JSON ได้ง่าย"""
     if isinstance(v, datetime):
-        # ให้ละเอียดถึงวินาทีพอ (หากอยากรวม microseconds: .isoformat())
         return v.replace(microsecond=0).isoformat()
     try:
-        # แปลง Decimal → float (ถ้ามี)
-        from decimal import Decimal
-        if isinstance(v, Decimal):
+        from decimal import Decimal  # lazy import
+        if isinstance(v, Decimal):  # type: ignore[name-defined]
             return float(v)
     except Exception:
         pass
@@ -51,21 +62,24 @@ def _to_jsonable(v: Any) -> Any:
 
 class ReportService:
     @staticmethod
-    def _ensure_date(day: Union[str, _date]) -> _date:
+    def _ensure_date(day: Optional[Union[str, _date]]) -> _date:
         return _ensure_date(day)
 
     @staticmethod
     def get_daily_report(
         db: Session,
-        day: Union[str, _date],
+        day: Optional[Union[str, _date]],
         *,
         ups_id: Optional[str] = None,
         only_with_events: bool = True,
     ):
         d: _date = ReportService._ensure_date(day)
 
-        start_dt = datetime.combine(d, _time.min)     # ต้นวัน (00:00:00)
-        end_dt   = start_dt + timedelta(days=1)       # ต้นวันถัดไป
+        # ===== กรอบวันเป็น "เวลาไทย" แล้วทำให้ naive เพื่อให้ตรงกับคอลัมน์ใน DB =====
+        start_local = datetime.combine(d, _time.min).replace(tzinfo=BKK)
+        end_local = start_local + timedelta(days=1)
+        start_dt = start_local.replace(tzinfo=None)
+        end_dt = end_local.replace(tzinfo=None)
 
         # ---------- Devices (active) ----------
         dev_sql = """
@@ -81,27 +95,34 @@ class ReportService:
         devs = db.execute(text(dev_sql), params).mappings().all()
 
         # ---------- Offline windows (overlap-aware + ongoing) ----------
-        # อิงช่วงรายงาน [start_dt, end_dt)
-        # ถ้าเหตุการณ์ยังเปิด (next_changed_at IS NULL) ให้คำนวณถึงเวลาปัจจุบัน แต่ไม่เกิน end_dt
-        report_now = min(datetime.now(), end_dt)
-
+        # ใช้เวลาปัจจุบันแบบไทย โดยไม่ต้องพึ่ง timezone tables:
+        #   UTC_TIMESTAMP() + INTERVAL 7 HOUR
         off_sql = """
             SELECT
                 ups_id,
                 GREATEST(changed_at, :s) AS win_start,
-                LEAST(COALESCE(next_changed_at, :now), :e) AS win_end,
-                TIMESTAMPDIFF(
-                    SECOND,
-                    GREATEST(changed_at, :s),
-                    LEAST(COALESCE(next_changed_at, :now), :e)
+                LEAST(
+                    COALESCE(next_changed_at, UTC_TIMESTAMP() + INTERVAL 7 HOUR),
+                    :e
+                ) AS win_end,
+                GREATEST(
+                    0,
+                    TIMESTAMPDIFF(
+                        SECOND,
+                        GREATEST(changed_at, :s),
+                        LEAST(
+                            COALESCE(next_changed_at, UTC_TIMESTAMP() + INTERVAL 7 HOUR),
+                            :e
+                        )
+                    )
                 ) AS duration_sec,
                 note
             FROM ups_status_event
             WHERE new_status = 'offline'
               AND changed_at < :e
-              AND COALESCE(next_changed_at, :now) > :s
+              AND COALESCE(next_changed_at, UTC_TIMESTAMP() + INTERVAL 7 HOUR) > :s
         """
-        off_params: Dict[str, Any] = {"s": start_dt, "e": end_dt, "now": report_now}
+        off_params: Dict[str, Any] = {"s": start_dt, "e": end_dt}
         if ups_id:
             off_sql += " AND ups_id = :uid"
             off_params["uid"] = ups_id
@@ -109,8 +130,7 @@ class ReportService:
         offline = db.execute(text(off_sql), off_params).mappings().all()
 
         # ---------- PowerFail events ----------
-        # (ยังคงดึงเฉพาะที่เริ่มภายในวัน; ถ้าต้องการ overlap-aware เหมือน offline
-        #  สามารถปรับใช้ GREATEST/LEAST เช่นเดียวกันได้)
+        # (ยังดึงเฉพาะที่เริ่มภายในวัน; ถ้าต้องการ overlap-aware ให้ปรับคล้าย offline)
         pf_sql = """
             SELECT ups_id, start_time, end_time, duration_seconds, message, event_data
             FROM ups_events
@@ -144,11 +164,13 @@ class ReportService:
             last_params["uid"] = ups_id
 
         last_status_rows = db.execute(
-            text(last_stat_sql.format(
-                ups_filter_inner=ups_filter_inner,
-                ups_filter_outer=ups_filter_outer
-            )),
-            last_params
+            text(
+                last_stat_sql.format(
+                    ups_filter_inner=ups_filter_inner,
+                    ups_filter_outer=ups_filter_outer,
+                )
+            ),
+            last_params,
         ).mappings().all()
 
         last_status_by_id: Dict[str, Dict[str, Any]] = {
@@ -191,27 +213,31 @@ class ReportService:
         for row in devs:
             sid = _sid(row["id"])
             b = ensure_bucket(sid)
-            b["meta"].update({
-                "ip": row.get("ip_address"),
-                "brand": row.get("brand"),
-                "model": row.get("model"),
-                "location": row.get("location"),
-                "capacityVA": _to_jsonable(row.get("capacity_va")),
-                "capacityW": _to_jsonable(row.get("capacity_w")),
-            })
+            b["meta"].update(
+                {
+                    "ip": row.get("ip_address"),
+                    "brand": row.get("brand"),
+                    "model": row.get("model"),
+                    "location": row.get("location"),
+                    "capacityVA": _to_jsonable(row.get("capacity_va")),
+                    "capacityW": _to_jsonable(row.get("capacity_w")),
+                }
+            )
 
         # offline (ใช้ช่วง win_start/win_end และ duration_sec ที่คิด overlap มาแล้ว)
         for r in offline:
             dur = int(r.get("duration_sec") or 0)
-            if dur < 0:  # กันเคส timezone เพี้ยน
+            if dur < 0:
                 dur = 0
             b = ensure_bucket(r["ups_id"])
-            b["offline"].append({
-                "start": _to_jsonable(r.get("win_start")),
-                "end": _to_jsonable(r.get("win_end")),
-                "durationSec": dur,
-                "note": r.get("note"),
-            })
+            b["offline"].append(
+                {
+                    "start": _to_jsonable(r.get("win_start")),
+                    "end": _to_jsonable(r.get("win_end")),
+                    "durationSec": dur,
+                    "note": r.get("note"),
+                }
+            )
 
         # powerfail
         for r in powerfail:
@@ -223,14 +249,16 @@ class ReportService:
                 except Exception:
                     evd = {}
             evd = evd or {}
-            b["powerFail"].append({
-                "start": _to_jsonable(r.get("start_time")),
-                "end": _to_jsonable(r.get("end_time")),
-                "durationSec": int(r.get("duration_seconds") or 0),
-                "note": r.get("message"),
-                "voltage": _to_jsonable(evd.get("voltage")),
-                "threshold": _to_jsonable(evd.get("threshold")),
-            })
+            b["powerFail"].append(
+                {
+                    "start": _to_jsonable(r.get("start_time")),
+                    "end": _to_jsonable(r.get("end_time")),
+                    "durationSec": int(r.get("duration_seconds") or 0),
+                    "note": r.get("message"),
+                    "voltage": _to_jsonable(evd.get("voltage")),
+                    "threshold": _to_jsonable(evd.get("threshold")),
+                }
+            )
 
         # meta: last status
         for sid, info in last_status_by_id.items():
@@ -240,10 +268,11 @@ class ReportService:
 
         devices: List[dict] = list(by_id.values())
 
-        # --- filter เฉพาะที่มีเหตุการณ์ (ถ้าต้องการ) ---
+        # filter เฉพาะที่มีเหตุการณ์ (ถ้าต้องการ)
         if only_with_events:
             devices = [
-                drow for drow in devices
+                drow
+                for drow in devices
                 if (len(drow.get("offline") or []) + len(drow.get("powerFail") or [])) > 0
             ]
 
@@ -260,7 +289,7 @@ class ReportService:
             "reportDate": d.isoformat(),
             "periodStart": d.strftime("%d/%m/%Y"),
             "periodEnd": d.strftime("%d/%m/%Y"),
-            "generatedAt": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "generatedAt": datetime.now(BKK).strftime("%d/%m/%Y %H:%M"),
             "periodTotalMinutes": 24 * 60,
             "devices": devices,
         }
