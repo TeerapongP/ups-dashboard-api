@@ -16,9 +16,11 @@ from app.services.ups_events import (
     log_events_for_snapshot,
 )
 from model.model import UPSDevice
-from app.services.ups_report_service import ups_report_service
 from io import BytesIO
 from fastapi.responses import StreamingResponse
+from app.schemas.report import DailyReportPayload
+from app.services.report_service import ReportService
+from datetime import datetime
 
 router = APIRouter()
 
@@ -123,147 +125,12 @@ def read_all(
 
     return {"count": len(items), "items": items}
 
-
-# ---------- GET: รายงานรายวัน (powerfail/offline เป็นนาที) ----------
-@router.get("/report/daily/{date}")
-def daily_report(
-    date: str,
-    use_status_event_powerfail: bool = Query(
-        False,
-        description="true = อ่าน powerfail จาก ups_status_event (ต้องรองรับ enum 'powerfail'); false = อ่านจาก ups_events.event_type='powerfail'",
-    ),
-    include_details: bool = Query(
-        False,
-        description="true = แนบช่วงเหตุการณ์รายเครื่อง (start/end/duration)"
-    ),
-    db: Session = Depends(get_db),
-):
-    """
-    สรุปนาทีรวมต่อวัน (รวมทุก UPS) ของ offline และ powerfail
-    """
+@router.get("/daily/{day}/json")
+def daily_report_json(day: str, db: Session = Depends(get_db)):
     try:
-        day = datetime.strptime(date, "%Y-%m-%d")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="รูปแบบวันที่ไม่ถูกต้อง (ต้องเป็น YYYY-MM-DD)")
-
-    devices = db.query(UPSDevice).filter(UPSDevice.is_active == True).all()
-    if not devices:
-        return []
-
-    total_offline = 0
-    total_powerfail = 0
-    device_reports = []
-
-    for dev in devices:
-        counters = ups_event_service.get_daily_counters(
-            db,
-            day,
-            dev.id,
-            use_status_event_powerfail=use_status_event_powerfail,
-        )
-
-        # ✅ กรอง: ถ้าไม่มี offline/powerfail เลย ข้าม
-        if counters["offline_minutes"] == 0 and counters["powerfail_minutes"] == 0:
-            continue
-
-        total_offline += counters["offline_minutes"]
-        total_powerfail += counters["powerfail_minutes"]
-
-        row = {
-            "ups_id": dev.id,
-            "ip": dev.ip_address,
-            "offline_minutes": counters["offline_minutes"],
-            "powerfail_minutes": counters["powerfail_minutes"],
-        }
-
-        if include_details:
-            row["details"] = ups_event_service.get_daily_details(
-                db, day, dev.id, use_status_event_powerfail=use_status_event_powerfail
-            )
-
-        device_reports.append(row)
-
-    # ✅ ถ้า device_reports ว่าง ให้ return [] เลย
-    if not device_reports:
-        return []
-
-    return {
-        "date": date,
-        "offline_minutes": total_offline,
-        "powerfail_minutes": total_powerfail,
-        "devices": device_reports,
-    }
+        return ReportService.get_daily_report(db, day)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get(
-    "/report/daily/{date}/blob",
-    response_class=StreamingResponse,
-    responses={
-        200: {
-            "content": {
-                "application/pdf": {"schema": {"type": "string", "format": "binary"}},
-                "text/html": {"schema": {"type": "string", "format": "binary"}},
-            },
-            "description": "Daily report as binary (PDF if available, otherwise HTML).",
-        },
-        400: {"description": "Bad date format"},
-    },
-)
-def daily_report_blob(
-    date: str,
-    use_status_event_powerfail: bool = Query(False),
-    include_details: bool = Query(False),
-    force_html: bool = Query(False, description="บังคับส่ง HTML แทน PDF"),
-    db: Session = Depends(get_db),
-):
-    # 1) parse date
-    try:
-        day = datetime.strptime(date, "%Y-%m-%d")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="รูปแบบวันที่ไม่ถูกต้อง (YYYY-MM-DD)")
 
-    filename_base = f"ups-downtime-{date}"
-
-    # 2) ถ้าบังคับ HTML ก็ส่ง HTML เลย
-    if force_html:
-        html_str = ups_report_service.generate_daily_html(
-            db, day, use_status_event_powerfail=use_status_event_powerfail, include_details=include_details
-        )
-        data = html_str.encode("utf-8")
-        return StreamingResponse(
-            BytesIO(data),
-            media_type="text/html",
-            headers={"Content-Disposition": f'attachment; filename="{filename_base}.html"'},
-        )
-
-    # 3) พยายามสร้าง PDF (ถ้า WeasyPrint ไม่พร้อมให้ fallback เป็น HTML)
-    try:
-        pdf_io = ups_report_service.generate_daily_pdf(
-            db, day, use_status_event_powerfail=use_status_event_powerfail, include_details=include_details
-        )
-    except RuntimeError:
-        # Fallback → HTML
-        html_str = ups_report_service.generate_daily_html(
-            db, day, use_status_event_powerfail=use_status_event_powerfail, include_details=include_details
-        )
-        data = html_str.encode("utf-8")
-        return StreamingResponse(
-            BytesIO(data),
-            media_type="text/html",
-            headers={"Content-Disposition": f'attachment; filename="{filename_base}.html"'},
-        )
-
-    # ถ้าไม่มีข้อมูลให้ไฟล์ว่าง ๆ (หรือจะ 204 ก็ได้)
-    if pdf_io is None:
-        return StreamingResponse(
-            BytesIO(b""),
-            media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'},
-        )
-
-    # OK → PDF
-    return StreamingResponse(
-        pdf_io,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename_base}.pdf"'},
-    )

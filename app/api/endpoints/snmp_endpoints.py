@@ -75,12 +75,11 @@ def update_device(
 # ---------- Delete: UPS ----------
 @router.delete("/devices/{ups_id}", status_code=status.HTTP_200_OK)
 def delete_device(
-    ups_id: int = Path(..., ge=1),
-    delete_profile: bool = Query(True, description="ลบโปรไฟล์ CUSTOM_* ที่ไม่ถูกใช้งานด้วยหรือไม่"),
+    ups_id: str = Path(...),   # ไม่ใส่ ge
     db: Session = Depends(get_db),
 ):
     try:
-        result = snmp_service.delete_device(db, ups_id=ups_id, delete_profile=delete_profile)
+        result = snmp_service.delete_device(db, ups_id=ups_id)
         db.commit()
         if result.get("deleted", 0) == 0:
             raise HTTPException(status_code=404, detail=f"ไม่พบ UPS id={ups_id}")
@@ -90,6 +89,7 @@ def delete_device(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"ลบไม่สำเร็จ: {e}")
+
 
 # ---------- View: OIDs by IP (ใช้ในหน้าเดียว) ----------
 @router.get("/devices/by-ip/{ip}/oids", status_code=status.HTTP_200_OK)
