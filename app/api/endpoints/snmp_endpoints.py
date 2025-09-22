@@ -16,7 +16,10 @@ from typing import Optional
 from sqlalchemy.orm import Session, selectinload
 from app.utils.errors import sanitize_db_error
 import logging
+from datetime import timezone, timedelta
+from zoneinfo import ZoneInfo
 
+BKK = ZoneInfo("Asia/Bangkok")
 router = APIRouter(prefix="/snmp", tags=["SNMP / OID"])
 
 # ---------- DB dependency ----------
@@ -138,6 +141,19 @@ def _pick_timestamp(obj) -> Optional[datetime]:
             return v
     return None
 
+def _to_bangkok_iso(dt):
+    """
+    รับ datetime (อาจเป็น naive หรือ aware) แล้วคืนค่า ISO-8601 พร้อม +07:00
+    - ถ้า dt เป็น None => คืน None
+    - ถ้า dt เป็น naive => สมมติว่าเก็บเป็น UTC แล้วแปลงเป็น Asia/Bangkok
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        # สมมติว่าเวลาในฐานข้อมูลเป็น UTC (แก้ตรงนี้ถ้าระบบคุณเก็บเป็น local)
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(BKK).isoformat(timespec="seconds")  # e.g. 2025-09-22T19:51:58+07:00
+
 def _first_attr(obj: Any, names: list[str]):
     """
     คืนค่าตัวแรกที่พบจาก attribute หรือจาก JSON field (data/snapshot)
@@ -249,7 +265,9 @@ def list_devices(db: Session = Depends(get_db)):
             except Exception:
                 pass
 
-        last_seen = getattr(r, "last_seen", None) or ts
+        # last_seen: ถ้ามีคอลัมน์บน UPSDevice ให้ใช้ก่อน ไม่มีก็ fallback ts
+        raw_last_seen = getattr(r, "last_seen", None) or ts
+        last_seen_iso_bkk = _to_bangkok_iso(raw_last_seen)
 
         devices.append({
             "ups_id": r.id,
@@ -259,7 +277,7 @@ def list_devices(db: Session = Depends(get_db)):
             "location": r.location,
             "status": state,
             "temperature": temperature,
-            "last_seen": last_seen,
+            "last_seen": last_seen_iso_bkk,  
         })
 
     return devices
