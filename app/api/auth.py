@@ -49,7 +49,6 @@ def read_users_me(current_user: schemas.User = Depends(get_current_user)):
 
 @router.post("/logout", response_model=MessageResponse)
 async def logout(response: Response):
-    # ลบ cookie โดยการ set max_age = 0
     response.delete_cookie(
         key="access_token",
         path="/",

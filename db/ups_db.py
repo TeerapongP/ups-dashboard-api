@@ -1,4 +1,3 @@
-# db/ups_db.py
 from __future__ import annotations
 from datetime import datetime
 from typing import Optional
@@ -72,7 +71,7 @@ class UPSEvent(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ups_id: Mapped[str] = mapped_column(String(50), ForeignKey("ups_devices.id"), nullable=False)
 
-    event_type: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g. power_offline, temp_high, battery_low
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     severity:   Mapped[str] = mapped_column(Enum("info","warning","critical", name="severity_enum"), nullable=False)
     event_code: Mapped[Optional[str]] = mapped_column(String(20))
     message:    Mapped[Optional[str]] = mapped_column(Text)

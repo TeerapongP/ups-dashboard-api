@@ -1,283 +1,115 @@
-# Data Processing Utilities
-import datetime
-from typing import Optional, Dict, List, Any
-from app.services.ups_config import SCALE_FACTORS, KEY_TO_SCALE, OID_FALLBACKS
+# app/api/routes/data_utils.py
+from __future__ import annotations
+from typing import Any, Dict, List, Union, Optional
+import time
 
-
-def to_float(value: Optional[str], scale: float = 1.0) -> float:
-    """Convert string value to float with scaling"""
-    try:
-        return float(value) * scale if value is not None else 0.0
-    except (ValueError, TypeError):
-        return 0.0
-
-
-def to_int(value: Optional[str]) -> int:
-    """Convert string value to integer"""
-    try:
-        return int(float(value)) if value is not None else 0
-    except (ValueError, TypeError):
-        return 0
-
-
-def to_str(value: Optional[str]) -> Optional[str]:
-    """Clean and normalize string value"""
-    if value is None:
-        return None
-    cleaned = str(value).strip().strip('"')
-    return cleaned if cleaned else None
-
-
-def format_decimal(value: Optional[float], decimals: int = 2) -> Optional[float]:
-    """Format float to specified decimal places"""
-    try:
-        if value is None:
-            return None
-        return round(float(value), decimals)
-    except (ValueError, TypeError):
-        return None
-
-
-def parse_date(value: Optional[str]) -> Optional[str]:
-    """Parse various date formats to ISO format"""
-    cleaned_value = to_str(value)
-    if not cleaned_value:
-        return None
-    
-    date_formats = [
-        "%Y-%m-%d", "%d/%m/%Y", "%m/%Y", "%Y/%m", 
-        "%d-%m-%Y", "%m-%Y", "%Y.%m.%d"
-    ]
-    
-    for fmt in date_formats:
-        try:
-            dt = datetime.datetime.strptime(cleaned_value, fmt)
-            if fmt in ("%m/%Y", "%Y/%m", "%m-%Y"):
-                dt = dt.replace(day=1)
-            return dt.date().isoformat()
-        except ValueError:
-            continue
-    
-    return cleaned_value  # Return original if parsing fails
-
+Number = Union[int, float]
+OIDConfig = Dict[str, Union[str, List[str]]]
 
 class OIDResolver:
-    """Resolves OID values with fallback support"""
-    
-    def __init__(self, oid_config: Dict[str, str]):
-        self.oid_config = oid_config
-        self.key_oids = self._build_key_oids()
-    
-    def _build_key_oids(self) -> Dict[str, List[str]]:
-        """Build mapping of data keys to OID lists (primary + fallbacks)"""
-        key_oids = {}
-        
-        data_keys = [
-            # Battery
-            "battery_percent", "battery_vdc", "battery_runtime_min", "temperature_C",
-            # Input/Output
-            "input_L1_V", "input_L2_V", "input_L3_V", 
-            "input_L1_A", "input_L2_A", "input_L3_A", "input_freq_Hz",
-            "output_L1_V", "output_L2_V", "output_L3_V",
-            "output_L1_A", "output_L2_A", "output_L3_A", "output_freq_Hz",
-            # Load
-            "load_VA", "load_W",
-            # Identification & ratings
-            "ident_manufacturer", "ident_model", "ident_fw",
-            "rating_voltage_v", "rating_frequency_hz", "rating_battery_voltage_v",
-        ]
-        
-        for key in data_keys:
-            oid_list = []
-            
-            # Add primary OID if exists
-            if key in self.oid_config and self.oid_config[key]:
-                oid_list.append(self.oid_config[key])
-            
-            # Add fallback OIDs
-            oid_list.extend(OID_FALLBACKS.get(key, []))
-            
-            # Remove duplicates while preserving order
-            unique_oids = []
-            seen = set()
-            for oid in oid_list:
-                if oid and oid not in seen:
-                    unique_oids.append(oid)
-                    seen.add(oid)
-            
-            key_oids[key] = unique_oids
-        
-        return key_oids
-    
+    def __init__(self, oid_config: Optional[OIDConfig] = None):
+        self.oid_config: OIDConfig = oid_config or {}
+
     def get_all_oids(self) -> List[str]:
-        """Get all unique OIDs needed for data collection"""
-        all_oids = []
-        for oid_list in self.key_oids.values():
-            all_oids.extend(oid_list)
-        return list(dict.fromkeys(all_oids))  # Remove duplicates
-    
-    def resolve_value(self, key: str, oid_values: Dict[str, Optional[str]]) -> Optional[str]:
-        """Resolve value for a key using primary OID and fallbacks"""
-        for oid in self.key_oids.get(key, []):
-            value = oid_values.get(oid)
-            if value is not None and value != "0":
-                return value
+        out: List[str] = []
+        seen = set()
+        for v in self.oid_config.values():
+            if isinstance(v, str):
+                if v and v not in seen:
+                    seen.add(v); out.append(v)
+            else:
+                for oid in v:
+                    if oid and oid not in seen:
+                        seen.add(oid); out.append(oid)
+        return out
+
+    def pick_value(self, key: str, raw: Dict[str, Any]) -> Any:
+        mapping = self.oid_config.get(key)
+        if not mapping:
+            return None
+        if isinstance(mapping, str):
+            return raw.get(mapping)
+        for oid in mapping:
+            val = raw.get(oid)
+            if val not in (None, "", "NULL"):
+                return val
         return None
 
 
-# ... ด้านบนคงเดิม
-
 class DataProcessor:
-    """Processes raw SNMP data into structured UPS data"""
-    
-    def __init__(self, resolver: OIDResolver, voltage_threshold: float = 180.0):
+    def __init__(self, resolver: OIDResolver,
+                 scale_map: Optional[Dict[str, str]] = None,
+                 scale_factors: Optional[Dict[str, Number]] = None):
         self.resolver = resolver
-        self.voltage_threshold = voltage_threshold
+        self.scale_key_map = scale_map or {}
+        self.scale_factors = scale_factors or {}
 
-    # ---------- helpers ----------
+    def _scale(self, key: str, value: Any) -> Any:
+        if value is None:
+            return None
+        skey = self.scale_key_map.get(key)
+        factor = float(self.scale_factors.get(skey, 1.0)) if skey else 1.0
+        try:
+            return float(value) * factor
+        except Exception:
+            return value
+
     @staticmethod
-    def _is_zero(x: Optional[float]) -> bool:
-        """treat None as zero-false; float safe-compare to 0"""
-        if x is None:
-            return False
-        return abs(float(x)) < 1e-6
+    def _as_int(v: Any) -> Optional[int]:
+        if v is None or v == "":
+            return None
+        try:
+            return int(round(float(v)))
+        except Exception:
+            return None
 
-    def _is_offline(
-        self,
-        in_v: List[Optional[float]],
-        battery_percent: int,
-        battery_vdc: float,
-        battery_runtime: int,
-        temperature: float,
-        load_va: int,
-        load_w: int,
-    ) -> bool:
-        # ทุกเฟส input = 0 และ metrics สำคัญเป็นศูนย์
-        return all([
-            self._is_zero(in_v[0]), self._is_zero(in_v[1]), self._is_zero(in_v[2]),
-            battery_percent == 0,
-            self._is_zero(battery_vdc),
-            battery_runtime == 0,
-            self._is_zero(temperature),
-            load_va == 0,
-            load_w == 0,
-        ])
+    def process_ups_data(self, ip: str, raw: Dict[str, Any], device_config: Dict[str, Any]) -> Dict[str, Any]:
+        # ดึงค่าที่ต้องใช้ตามตัวอย่าง
+        bp   = self._as_int(self._scale("battery_percent",     self.resolver.pick_value("battery_percent",     raw)))
+        bvdc = self._as_int(self._scale("battery_vdc",         self.resolver.pick_value("battery_vdc",         raw)))
+        brtm = self._as_int(self._scale("battery_runtime_min", self.resolver.pick_value("battery_runtime_min", raw)))
+        temp = self._as_int(self._scale("temperature_C",       self.resolver.pick_value("temperature_C",       raw)))
 
-    def _is_power_fail(self, in_v: List[Optional[float]]) -> bool:
-        v1 = in_v[0]  
-        return v1 is not None and v1 < self.voltage_threshold
+        in_l1v = self._as_int(self._scale("input_L1_V",  self.resolver.pick_value("input_L1_V",  raw)))
+        in_l2v = self._as_int(self._scale("input_L2_V",  self.resolver.pick_value("input_L2_V",  raw)))
+        in_l3v = self._as_int(self._scale("input_L3_V",  self.resolver.pick_value("input_L3_V",  raw)))
+        in_l1a = self._as_int(self._scale("input_L1_A",  self.resolver.pick_value("input_L1_A",  raw)))
+        in_l2a = self._as_int(self._scale("input_L2_A",  self.resolver.pick_value("input_L2_A",  raw)))
+        in_l3a = self._as_int(self._scale("input_L3_A",  self.resolver.pick_value("input_L3_A",  raw)))
+        in_f   = self._as_int(self._scale("input_freq_Hz", self.resolver.pick_value("input_freq_Hz", raw)))
 
+        out_l1v = self._as_int(self._scale("output_L1_V", self.resolver.pick_value("output_L1_V", raw)))
+        out_l2v = self._as_int(self._scale("output_L2_V", self.resolver.pick_value("output_L2_V", raw)))
+        out_l3v = self._as_int(self._scale("output_L3_V", self.resolver.pick_value("output_L3_V", raw)))
+        out_l1a = self._as_int(self._scale("output_L1_A", self.resolver.pick_value("output_L1_A", raw)))
+        out_l2a = self._as_int(self._scale("output_L2_A", self.resolver.pick_value("output_L2_A", raw)))
+        out_l3a = self._as_int(self._scale("output_L3_A", self.resolver.pick_value("output_L3_A", raw)))
+        out_f   = self._as_int(self._scale("output_freq_Hz", self.resolver.pick_value("output_freq_Hz", raw)))
 
-    # ---------- getters ----------
-    def _get_scaled_float(self, key: str, oid_values: Dict[str, Optional[str]]) -> float:
-        raw_value = self.resolver.resolve_value(key, oid_values)
-        scale_key = KEY_TO_SCALE.get(key)
-        scale = SCALE_FACTORS.get(scale_key, 1.0) if scale_key else 1.0
-        return to_float(raw_value, scale)
+        load_va = self._as_int(self._scale("load_VA", self.resolver.pick_value("load_VA", raw)))
+        load_w  = self._as_int(self._scale("load_W",  self.resolver.pick_value("load_W",  raw)))
 
-    def _get_int(self, key: str, oid_values: Dict[str, Optional[str]]) -> int:
-        raw_value = self.resolver.resolve_value(key, oid_values)
-        return to_int(raw_value)
-
-    def _get_string(self, key: str, oid_values: Dict[str, Optional[str]]) -> Optional[str]:
-        raw_value = self.resolver.resolve_value(key, oid_values)
-        return to_str(raw_value)
-
-    # ---------- main ----------
-    def process_ups_data(
-        self, 
-        ip: str, 
-        oid_values: Dict[str, Optional[str]], 
-        device_config: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Process raw OID values into structured UPS data"""
-
-        # Battery / thermal
-        battery_percent = self._get_int("battery_percent", oid_values)
-        battery_vdc_raw = self._get_scaled_float("battery_vdc", oid_values)
-        battery_runtime = self._get_int("battery_runtime_min", oid_values)
-        temperature_raw = self._get_scaled_float("temperature_C", oid_values)
-
-        # Input (raw first for logic), then formatted for output
-        in_L1_raw = self._get_scaled_float("input_L1_V", oid_values)
-        in_L2_raw = self._get_scaled_float("input_L2_V", oid_values)
-        in_L3_raw = self._get_scaled_float("input_L3_V", oid_values)
-        in_L1 = format_decimal(in_L1_raw)
-        in_L2 = format_decimal(in_L2_raw)
-        in_L3 = format_decimal(in_L3_raw)
-
-        in_A1 = format_decimal(self._get_scaled_float("input_L1_A", oid_values))
-        in_A2 = format_decimal(self._get_scaled_float("input_L2_A", oid_values))
-        in_A3 = format_decimal(self._get_scaled_float("input_L3_A", oid_values))
-        in_f  = format_decimal(self._get_scaled_float("input_freq_Hz", oid_values))
-
-        input_data = {
-            "L1V": in_L1, "L2V": in_L2, "L3V": in_L3,
-            "L1A": in_A1, "L2A": in_A2, "L3A": in_A3,
-            "freqHz": in_f,
-        }
-
-        # Output
-        out_L1 = format_decimal(self._get_scaled_float("output_L1_V", oid_values))
-        out_L2 = format_decimal(self._get_scaled_float("output_L2_V", oid_values))
-        out_L3 = format_decimal(self._get_scaled_float("output_L3_V", oid_values))
-        out_A1 = format_decimal(self._get_scaled_float("output_L1_A", oid_values))
-        out_A2 = format_decimal(self._get_scaled_float("output_L2_A", oid_values))
-        out_A3 = format_decimal(self._get_scaled_float("output_L3_A", oid_values))
-        out_f  = format_decimal(self._get_scaled_float("output_freq_Hz", oid_values))
-
-        output_data = {
-            "L1V": out_L1, "L2V": out_L2, "L3V": out_L3,
-            "L1A": out_A1, "L2A": out_A2, "L3A": out_A3,
-            "freqHz": out_f,
-        }
-
-        # Load
-        load_va = self._get_int("load_VA", oid_values)
-        load_w  = self._get_int("load_W", oid_values)
-
-        # ถ้า SNMP ไม่มีค่า load → คำนวณจาก Output L1 (เดี่ยว/ตัวแทนเฟส)
-        if not load_va and output_data["L1V"] and output_data["L1A"]:
-            load_va = round(output_data["L1V"] * output_data["L1A"])
-        if not load_w and output_data["L1V"] and output_data["L1A"]:
-            pf = device_config.get("power_factor", 0.8)
-            load_w = round(output_data["L1V"] * output_data["L1A"] * pf)
-
-        # Identification
-        brand = device_config.get("brand") or self._get_string("ident_manufacturer", oid_values)
-        model = device_config.get("model") or self._get_string("ident_model", oid_values)
-
-        # --------- Status ----------
-        in_volt_list = [in_L1_raw, in_L2_raw, in_L3_raw]
-
-        if self._is_offline(
-            in_volt_list,
-            battery_percent=battery_percent,
-            battery_vdc=battery_vdc_raw,
-            battery_runtime=battery_runtime,
-            temperature=temperature_raw,
-            load_va=load_va,
-            load_w=load_w,
-        ):
-            status = "Offline"
-        elif self._is_power_fail(in_volt_list):
-            status = "PowerFail"
-        else:
-            status = "Online"
-
+        # คืนรูปแบบตรงตัวอย่าง (status จะให้ UPSService คำนวน)
         return {
-            "id": f"UPS_{ip.replace('.', '_')}",
-            "status": status,
             "ip": ip,
-            "brand": brand,
-            "model": model,
+            "brand":    device_config.get("brand"),
+            "model":    device_config.get("model"),
             "location": device_config.get("location"),
-            "batteryPercent": battery_percent,
-            "batteryVDC": format_decimal(battery_vdc_raw/10),  
-            "backupTimeMin": battery_runtime,
-            "temperatureC": format_decimal(temperature_raw),
-            "input": input_data,
-            "output": output_data,
-            "loadVA": load_va,
-            "loadW": load_w,
+            "batteryPercent":  bp if bp is not None else 0,
+            "batteryVDC":      bvdc if bvdc is not None else 0,
+            "backupTimeMin":   brtm if brtm is not None else 0,
+            "temperatureC":    temp if temp is not None else 0,
+            "input": {
+                "L1V": in_l1v or 0, "L2V": in_l2v or 0, "L3V": in_l3v or 0,
+                "L1A": in_l1a or 0, "L2A": in_l2a or 0, "L3A": in_l3a or 0,
+                "freqHz": in_f or 0,
+            },
+            "output": {
+                "L1V": out_l1v or 0, "L2V": out_l2v or 0, "L3V": out_l3v or 0,
+                "L1A": out_l1a or 0, "L2A": out_l2a or 0, "L3A": out_l3a or 0,
+                "freqHz": out_f or 0,
+            },
+            "loadVA": load_va or 0,
+            "loadW":  load_w or 0,
+            "collected_at": time.time(),
         }

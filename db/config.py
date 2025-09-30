@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 import os
 
-load_dotenv()  # โหลด .env อัตโนมัติจาก root project
+load_dotenv()
 
 SQLALCHEMY_DATABASE_URL = os.getenv("SQLALCHEMY_DATABASE_URL")
 SECRET_KEY = os.getenv("SECRET_KEY")

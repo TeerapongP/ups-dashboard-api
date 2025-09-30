@@ -37,3 +37,8 @@ pysnmp==4.4.12
 pyasn1==0.4.8
 
 apscheduler>=3.10.4
+
+weasyprint>=62.0
+cairocffi>=1.7.0
+cffi>=1.15.0
+tzdata>=2023.3
