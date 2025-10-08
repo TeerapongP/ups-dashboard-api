@@ -344,15 +344,38 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
     """
     ts = _parse_collected_at(snap)
 
-    st_raw = (snap.get("status") ).strip().lower()
-    if st_raw in ("online", "offline", "warning", "critical"):
+    # ตรวจสอบสถานะไฟดับ (L1V = 0 แต่ค่าอื่นยังมี)
+    input_ = snap.get("input") or {}
+    l1v = _to_float(input_.get("L1V"))
+    l2v = _to_float(input_.get("L2V"))
+    l3v = _to_float(input_.get("L3V"))
+    
+    # ตรวจสอบไฟดับ: L1V = 0 แต่มีค่าอื่นๆ ยังมาให้
+    is_power_outage = (
+        l1v == 0 and 
+        (l2v is not None or l3v is not None or 
+         snap.get("batteryPercent") is not None or 
+         snap.get("loadPct") is not None)
+    )
+    
+    # ตรวจสอบไฟตก: L1V อยู่ในช่วง 1-179V
+    is_power_drop = l1v is not None and 1 <= l1v <= 179
+    
+    st_raw = (snap.get("status") or "").strip().lower()
+    
+    if is_power_outage:
+        status_for_snapshot = "warning"
+        st_raw = "power_outage"  # สถานะใหม่สำหรับไฟดับ
+    elif is_power_drop:
+        status_for_snapshot = "warning" 
+        st_raw = "powerfail"  # ไฟตกยังใช้ powerfail เดิม
+    elif st_raw in ("online", "offline", "warning", "critical"):
         status_for_snapshot = st_raw
     elif st_raw == "powerfail":
         status_for_snapshot = "warning"
     else:
         status_for_snapshot = "online"
 
-    input_ = snap.get("input") or {}
     output = snap.get("output") or {}
 
     # --- แปลงความถี่จากเดซิ-เฮิร์ตซ์เป็นเฮิร์ตซ์ (หาร 10) ---
@@ -394,16 +417,24 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
     session.add(row)
     session.flush()
 
-    # ----- ช่วง powerfail -----
-    if st_raw == "powerfail":
-        # ตรวจสอบว่ามี event powerfail ที่เปิดอยู่หรือไม่
-        open_pf = (
+    # ----- ช่วง power events (powerfail และ power_outage) -----
+    if st_raw in ("powerfail", "power_outage"):
+        # กำหนด event_type และ message ตามประเภท
+        if st_raw == "power_outage":
+            event_type = "power_outage"
+            base_message = "Power outage detected"
+        else:
+            event_type = "powerfail" 
+            base_message = "Power failure detected"
+            
+        # ตรวจสอบว่ามี event ประเภทนี้ที่เปิดอยู่หรือไม่
+        open_event = (
             session.execute(
                 select(UPSEvent)
                 .where(
                     and_(
                         UPSEvent.ups_id == ups_id,
-                        UPSEvent.event_type == "powerfail",
+                        UPSEvent.event_type == event_type,
                         UPSEvent.end_time.is_(None),
                     )
                 )
@@ -412,15 +443,12 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
             .scalars()
             .first()
         )
-        if not open_pf:
-            # สร้าง message ที่ละเอียดขึ้นตามสาเหตุไฟตก
-            input_voltages = [
-                _to_float(input_.get("L1V")),
-                _to_float(input_.get("L2V")),
-                _to_float(input_.get("L3V"))
-            ]
+        
+        if not open_event:
+            # สร้าง message ที่ละเอียดขึ้นตามสาเหตุ
+            input_voltages = [l1v, l2v, l3v]
             
-            # ตรวจสอบสาเหตุไฟตก
+            # ตรวจสอบสาเหตุ
             voltage_issues = []
             for i, voltage in enumerate(input_voltages, 1):
                 if voltage is not None:
@@ -430,14 +458,20 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
                         voltage_issues.append(f"L{i}: {voltage}V (ไฟตก)")
             
             if voltage_issues:
-                message = f"Power failure detected - {', '.join(voltage_issues)}"
+                message = f"{base_message} - {', '.join(voltage_issues)}"
             else:
-                message = "Power failure detected"
+                message = base_message
+            
+            # กำหนด detection_reason
+            if st_raw == "power_outage":
+                detection_reason = "no_input_power"
+            else:
+                detection_reason = "voltage_below_threshold"
             
             ups_event_service.log_event(
                 session,
                 ups_id=ups_id,
-                event_type="powerfail",
+                event_type=event_type,
                 severity="warning",
                 message=message,
                 event_data={
@@ -446,31 +480,32 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
                         "L2V": input_voltages[1], 
                         "L3V": input_voltages[2]
                     },
-                    "detection_reason": "voltage_below_threshold" if any(0 < v < 180 for v in input_voltages if v is not None) else "no_input_power"
+                    "detection_reason": detection_reason
                 },
                 start_time=ts,
             )
     else:
-        # ปิด event powerfail ที่เปิดอยู่ (ถ้ามี)
-        open_pf = (
-            session.execute(
-                select(UPSEvent)
-                .where(
-                    and_(
-                        UPSEvent.ups_id == ups_id,
-                        UPSEvent.event_type == "powerfail",
-                        UPSEvent.end_time.is_(None),
+        # ปิด power events ที่เปิดอยู่ (ทั้ง powerfail และ power_outage)
+        for event_type in ["powerfail", "power_outage"]:
+            open_event = (
+                session.execute(
+                    select(UPSEvent)
+                    .where(
+                        and_(
+                            UPSEvent.ups_id == ups_id,
+                            UPSEvent.event_type == event_type,
+                            UPSEvent.end_time.is_(None),
+                        )
                     )
+                    .order_by(UPSEvent.start_time.desc())
                 )
-                .order_by(UPSEvent.start_time.desc())
+                .scalars()
+                .first()
             )
-            .scalars()
-            .first()
-        )
-        if open_pf:
-            open_pf.end_time = ts
-            open_pf.message = f"{open_pf.message} - Power restored"
-            session.flush()
+            if open_event:
+                open_event.end_time = ts
+                open_event.message = f"{open_event.message} - Power restored"
+                session.flush()
 
     # ----- ช่วง offline -----
     if st_raw == "offline":
