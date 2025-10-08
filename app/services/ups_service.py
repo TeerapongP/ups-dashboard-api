@@ -31,22 +31,53 @@ def _human_status(payload: Dict[str, Any]) -> str:
     """
     นิยามสถานะให้มนุษย์อ่าน:
       - Offline    : output รวมเป็น 0
-      - Powerfail  : output > 0 แต่ input รวมเป็น 0 (ไฟขาเข้าไม่มี แต่ยังจ่ายจากแบต/บายพาส)
-      - Online     : input > 0 และ output > 0
+      - Powerfail  : 
+        1) output > 0 แต่ input รวมเป็น 0 (ไฟขาเข้าไม่มี แต่ยังจ่ายจากแบต/บายพาส)
+        2) Input voltage < 180V แต่ไม่เท่ากับ 0 (ไฟตกแต่ยังมีไฟเหลือเล็กน้อย)
+      - Online     : input ปกติ และ output > 0
     """
+    from app.constants import VoltageThresholds, UPSStatus
+    
     try:
         i = payload.get("input", {}) or {}
         o = payload.get("output", {}) or {}
-        in_sum = int(i.get("L1V") or 0) + int(i.get("L2V") or 0) + int(i.get("L3V") or 0)
-        out_sum = int(o.get("L1V") or 0) + int(o.get("L2V") or 0) + int(o.get("L3V") or 0)
+        
+        # ดึงค่าแรงดันแต่ละเฟส
+        in_l1v = float(i.get("L1V") or 0)
+        in_l2v = float(i.get("L2V") or 0)
+        in_l3v = float(i.get("L3V") or 0)
+        
+        out_l1v = float(o.get("L1V") or 0)
+        out_l2v = float(o.get("L2V") or 0)
+        out_l3v = float(o.get("L3V") or 0)
+        
+        in_sum = in_l1v + in_l2v + in_l3v
+        out_sum = out_l1v + out_l2v + out_l3v
+        
+        # ถ้า output = 0 แสดงว่า UPS ปิดสนิท
         if out_sum <= 0:
-            return "Offline"
-        if in_sum <= 0 and out_sum > 0:
-            return "Powerfail"
-        return "Online"
+            return UPSStatus.OFFLINE
+        
+        # ถ้า output > 0 แต่มีเงื่อนไขไฟตก
+        if out_sum > 0:
+            # เงื่อนไข 1: input รวมเป็น 0 (ไฟขาเข้าไม่มีเลย)
+            if in_sum <= 0:
+                return UPSStatus.POWERFAIL
+            
+            # เงื่อนไข 2: ตรวจสอบแรงดันแต่ละเฟสว่าต่ำกว่า threshold หรือไม่
+            voltage_inputs = [in_l1v, in_l2v, in_l3v]
+            
+            for voltage in voltage_inputs:
+                # ถ้าแรงดัน > 0 แต่ < 180V ถือว่าไฟตก
+                if 0 < voltage < VoltageThresholds.POWER_FAIL:
+                    return UPSStatus.POWERFAIL
+        
+        # ถ้าไม่เข้าเงื่อนไขข้างต้น แสดงว่าปกติ
+        return UPSStatus.ONLINE
+        
     except Exception:
         # ถ้าคำนวณไม่ได้ ให้ถือว่า Online เพื่อไม่เตะระบบ
-        return "Online"
+        return UPSStatus.ONLINE
 
 def _blank_identity_fields(rec: Dict[str, Any]) -> None:
     """บังคับให้ brand/model/location เป็น string ว่าง"""

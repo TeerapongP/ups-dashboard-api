@@ -2,6 +2,7 @@
 from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
+import re
 
 from sqlalchemy.orm import Session
 from sqlalchemy import select, and_
@@ -14,6 +15,9 @@ from model.model import (
     UPSDevice,
     UPSStatus,
 )
+
+# สำหรับ _eval_number_string
+_ARITH_SAFE = re.compile(r"^[\d\.\s\+\-\*\/\(\)]+$")
 
 # -------------------------
 # Utilities
@@ -392,6 +396,7 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
 
     # ----- ช่วง powerfail -----
     if st_raw == "powerfail":
+        # ตรวจสอบว่ามี event powerfail ที่เปิดอยู่หรือไม่
         open_pf = (
             session.execute(
                 select(UPSEvent)
@@ -408,15 +413,45 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
             .first()
         )
         if not open_pf:
+            # สร้าง message ที่ละเอียดขึ้นตามสาเหตุไฟตก
+            input_voltages = [
+                _to_float(input_.get("L1V")),
+                _to_float(input_.get("L2V")),
+                _to_float(input_.get("L3V"))
+            ]
+            
+            # ตรวจสอบสาเหตุไฟตก
+            voltage_issues = []
+            for i, voltage in enumerate(input_voltages, 1):
+                if voltage is not None:
+                    if voltage == 0:
+                        voltage_issues.append(f"L{i}: 0V (ไฟดับ)")
+                    elif 0 < voltage < 180:
+                        voltage_issues.append(f"L{i}: {voltage}V (ไฟตก)")
+            
+            if voltage_issues:
+                message = f"Power failure detected - {', '.join(voltage_issues)}"
+            else:
+                message = "Power failure detected"
+            
             ups_event_service.log_event(
                 session,
                 ups_id=ups_id,
                 event_type="powerfail",
                 severity="warning",
-                message="Power failure detected",
+                message=message,
+                event_data={
+                    "input_voltages": {
+                        "L1V": input_voltages[0],
+                        "L2V": input_voltages[1], 
+                        "L3V": input_voltages[2]
+                    },
+                    "detection_reason": "voltage_below_threshold" if any(0 < v < 180 for v in input_voltages if v is not None) else "no_input_power"
+                },
                 start_time=ts,
             )
     else:
+        # ปิด event powerfail ที่เปิดอยู่ (ถ้ามี)
         open_pf = (
             session.execute(
                 select(UPSEvent)
@@ -434,6 +469,7 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
         )
         if open_pf:
             open_pf.end_time = ts
+            open_pf.message = f"{open_pf.message} - Power restored"
             session.flush()
 
     # ----- ช่วง offline -----
