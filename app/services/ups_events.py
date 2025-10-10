@@ -114,7 +114,7 @@ class UPSEventService:
     ) -> UPSStatusEvent:
         """
         ปิด event ล่าสุด (ถ้ามีและยังไม่ปิด) + เปิด event ใหม่ (append-only)
-        หมายเหตุ: ตามโมเดลปัจจุบัน enum อนุญาตเฉพาะ online|warning|critical|offline
+        หมายเหตุ: ตามโมเดลปัจจุบัน enum อนุญาต online|warning|critical|offline|powerCut
         """
         ts = ts or datetime.utcnow()
 
@@ -338,43 +338,52 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
     """
     บันทึก UPSStatus 1 แถว (snapshot)
     - ใช้ collected_at เป็น timestamp (fallback = utcnow)
-    - map 'powerfail' -> 'warning' สำหรับ UPSStatus.status (เพราะ enum ไม่มี powerfail)
+    - map 'powerfail' -> 'warning', 'powerCut' -> 'powerCut' สำหรับ UPSStatus.status
     - log status change ใน ups_status_event (ใช้สถานะที่ map แล้ว)
     - จัดการช่วง UPSEvent สำหรับ powerfail/offline: เปิดเมื่อเข้า/ปิดเมื่อออก
     """
     ts = _parse_collected_at(snap)
 
-    # ตรวจสอบสถานะไฟดับ (L1V = 0 แต่ค่าอื่นยังมี)
+    # ตรวจสอบสถานะไฟฟ้า
     input_ = snap.get("input") or {}
     l1v = _to_float(input_.get("L1V"))
     l2v = _to_float(input_.get("L2V"))
     l3v = _to_float(input_.get("L3V"))
     
-    # ตรวจสอบไฟดับ: L1V = 0 แต่มีค่าอื่นๆ ยังมาให้
-    is_power_outage = (
-        l1v == 0 and 
-        (l2v is not None or l3v is not None or 
-         snap.get("batteryPercent") is not None or 
-         snap.get("loadPct") is not None)
-    )
-    
-    # ตรวจสอบไฟตก: L1V อยู่ในช่วง 1-179V
-    is_power_drop = l1v is not None and 1 <= l1v <= 179
-    
+    # ตรวจสอบสถานะจาก snap ก่อน
     st_raw = (snap.get("status") or "").strip().lower()
     
-    if is_power_outage:
-        status_for_snapshot = "warning"
-        st_raw = "power_outage"  # สถานะใหม่สำหรับไฟดับ
-    elif is_power_drop:
-        status_for_snapshot = "warning" 
-        st_raw = "powerfail"  # ไฟตกยังใช้ powerfail เดิม
-    elif st_raw in ("online", "offline", "warning", "critical"):
+    # ถ้า status จาก UPS Service บอกว่า Online แล้ว ให้เชื่อถือ
+    if st_raw == "online":
+        status_for_snapshot = "online"
+        # ไม่ต้องตรวจสอบไฟตกเพิ่มเติม เพราะ UPS Service ประมวลผลแล้ว
+    elif st_raw == "offline":
+        status_for_snapshot = "offline"
+    elif st_raw in ("warning", "critical"):
         status_for_snapshot = st_raw
     elif st_raw == "powerfail":
         status_for_snapshot = "warning"
+    elif st_raw == "powerCut":
+        status_for_snapshot = "powerCut"
     else:
-        status_for_snapshot = "online"
+        # ถ้าไม่มี status หรือไม่รู้จัก ให้ตรวจสอบจากแรงดัน
+        if l1v is not None:
+            if l1v == 0:
+                # powerCut สนิท
+                status_for_snapshot = "critical"
+                st_raw = "power_outage"
+            elif l1v < 180:
+                # ไฟตก
+                status_for_snapshot = "warning"
+                st_raw = "powerfail"
+            else:
+                # ไฟปกติ
+                status_for_snapshot = "online"
+                st_raw = "online"
+        else:
+            # ไม่มีข้อมูลแรงดัน ให้ถือว่าปกติ
+            status_for_snapshot = "online"
+            st_raw = "online"
 
     output = snap.get("output") or {}
 
@@ -453,7 +462,7 @@ def persist_status(session: Session, ups_id: str, snap: Dict[str, Any]) -> UPSSt
             for i, voltage in enumerate(input_voltages, 1):
                 if voltage is not None:
                     if voltage == 0:
-                        voltage_issues.append(f"L{i}: 0V (ไฟดับ)")
+                        voltage_issues.append(f"L{i}: 0V (powerCut)")
                     elif 0 < voltage < 180:
                         voltage_issues.append(f"L{i}: {voltage}V (ไฟตก)")
             

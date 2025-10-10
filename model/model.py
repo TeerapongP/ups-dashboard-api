@@ -50,7 +50,7 @@ class UPSStatus(Base):
     ups_id = Column(String(50), ForeignKey("ups_devices.id"), nullable=False)  # FK -> VARCHAR(50)
     timestamp = Column(TIMESTAMP, default=datetime.utcnow)
 
-    status = Column(Enum("online", "warning", "critical", "offline"), nullable=False)
+    status = Column(Enum("online", "warning", "critical", "offline", "powerCut"), nullable=False)
     battery_percentage = Column(DECIMAL(5, 2))
     battery_voltage = Column(DECIMAL(6, 2))
     backup_time_minutes = Column(Integer)
@@ -148,8 +148,8 @@ class UPSStatusEvent(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     ups_id = Column(String(50), ForeignKey("ups_devices.id"), nullable=False)
 
-    old_status = Column(Enum("online", "warning", "critical", "offline"))
-    new_status = Column(Enum("online", "warning", "critical", "offline"), nullable=False)
+    old_status = Column(Enum("online", "warning", "critical", "offline", "powerCut"))
+    new_status = Column(Enum("online", "warning", "critical", "offline", "powerCut"), nullable=False)
 
     changed_at = Column(TIMESTAMP, nullable=False)         # WHEN status becomes new_status
     next_changed_at = Column(TIMESTAMP)                    # WHEN status changes again

@@ -29,55 +29,50 @@ def _ip_key(ip: str) -> Tuple[int, int, int, int]:
 
 def _human_status(payload: Dict[str, Any]) -> str:
     """
-    นิยามสถานะให้มนุษย์อ่าน:
-      - Offline    : output รวมเป็น 0
-      - Powerfail  : 
-        1) output > 0 แต่ input รวมเป็น 0 (ไฟขาเข้าไม่มี แต่ยังจ่ายจากแบต/บายพาส)
-        2) Input voltage < 180V แต่ไม่เท่ากับ 0 (ไฟตกแต่ยังมีไฟเหลือเล็กน้อย)
-      - Online     : input ปกติ และ output > 0
+    นิยามสถานะให้มนุษย์อ่าน (แก้ไขให้ถูกต้อง):
+      - Offline    : output รวมเป็น 0 หรือ UPS ไม่ตอบสนอง
+      - PowerFail  : input voltage ต่ำกว่า 180V อย่างชัดเจน แต่ยังมี output
+      - powerCut   : input = 0V แต่ยังมี output (ไฟดับแต่ UPS ใช้แบตเตอรี่)
+      - Online     : input และ output ปกติ
     """
-    from app.constants import VoltageThresholds, UPSStatus
-    
     try:
         i = payload.get("input", {}) or {}
         o = payload.get("output", {}) or {}
         
-        # ดึงค่าแรงดันแต่ละเฟส
+        # ดึงค่าแรงดันหลัก (L1V เป็นหลัก เพราะเป็นเฟสหลัก)
         in_l1v = float(i.get("L1V") or 0)
-        in_l2v = float(i.get("L2V") or 0)
-        in_l3v = float(i.get("L3V") or 0)
-        
         out_l1v = float(o.get("L1V") or 0)
-        out_l2v = float(o.get("L2V") or 0)
-        out_l3v = float(o.get("L3V") or 0)
         
-        in_sum = in_l1v + in_l2v + in_l3v
-        out_sum = out_l1v + out_l2v + out_l3v
+        # ตรวจสอบ output ก่อน - ถ้าไม่มี output แสดงว่า offline
+        if out_l1v <= 0:
+            return "Offline"
         
-        # ถ้า output = 0 แสดงว่า UPS ปิดสนิท
-        if out_sum <= 0:
-            return UPSStatus.OFFLINE
+        # ถ้ามี output แล้ว ตรวจสอบ input
+        # กรณีที่ 1: input ปกติ (>= 200V) แสดงว่า online
+        if in_l1v >= 200:
+            return "Online"
         
-        # ถ้า output > 0 แต่มีเงื่อนไขไฟตก
-        if out_sum > 0:
-            # เงื่อนไข 1: input รวมเป็น 0 (ไฟขาเข้าไม่มีเลย)
-            if in_sum <= 0:
-                return UPSStatus.POWERFAIL
+        # กรณีที่ 2: input อยู่ในช่วง 1-179V แสดงว่าไฟตกจริงๆ
+        if 1 <= in_l1v <= 179:
+            return "PowerFail"
+        
+        # กรณีที่ 3: input = 0 แต่มี output 
+        # แสดงว่าไฟดับสนิท แต่ UPS ใช้แบตเตอรี่
+        if in_l1v == 0:
+            # ถ้ามี battery percentage และ load แสดงว่า UPS ทำงานด้วยแบตเตอรี่
+            battery_pct = float(payload.get("batteryPercent", 0))
+            load_pct = float(payload.get("loadPct", 0))
             
-            # เงื่อนไข 2: ตรวจสอบแรงดันแต่ละเฟสว่าต่ำกว่า threshold หรือไม่
-            voltage_inputs = [in_l1v, in_l2v, in_l3v]
-            
-            for voltage in voltage_inputs:
-                # ถ้าแรงดัน > 0 แต่ < 180V ถือว่าไฟตก
-                if 0 < voltage < VoltageThresholds.POWER_FAIL:
-                    return UPSStatus.POWERFAIL
+            # ถ้ามีข้อมูล battery และ load แสดงว่าเป็น powerCut
+            if battery_pct > 0 or load_pct > 0:
+                return "powerCut"  # ไฟดับแต่ UPS ยังทำงานด้วยแบตเตอรี่
         
-        # ถ้าไม่เข้าเงื่อนไขข้างต้น แสดงว่าปกติ
-        return UPSStatus.ONLINE
+        # กรณีอื่นๆ ให้ถือว่า online เพื่อไม่ให้เกิด false alarm
+        return "Online"
         
     except Exception:
-        # ถ้าคำนวณไม่ได้ ให้ถือว่า Online เพื่อไม่เตะระบบ
-        return UPSStatus.ONLINE
+        # ถ้าคำนวณไม่ได้ ให้ถือว่า Online เพื่อไม่ให้เกิด false alarm
+        return "Online"
 
 def _blank_identity_fields(rec: Dict[str, Any]) -> None:
     """บังคับให้ brand/model/location เป็น string ว่าง"""
