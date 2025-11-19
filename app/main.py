@@ -48,7 +48,7 @@ app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(
     snmp_router,
     prefix="/api",
-    dependencies=[Depends(require_token)],  # ใช้ token กับทุกเส้น /api/snmp/*
+    # dependencies=[Depends(require_token)],  # ใช้ token กับทุกเส้น /api/snmp/*
     tags=["SNMP / OID"],
 )
 
